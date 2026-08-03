@@ -13,7 +13,7 @@ jobs:
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
           title: "New Commit — ${{ github.ref_name }}"
-          description: ${{ github.event.head_commit.message }}
-          url: ${{ github.event.head_commit.url }}
+          description: "${{ github.event.head_commit.message }}"
+          url: "https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
           color: 0x8B0000
           username: Fortune Bot Updates
