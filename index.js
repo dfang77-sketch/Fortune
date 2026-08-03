@@ -23,14 +23,11 @@ require('dotenv').config();
 const DEVELOPER_ID = '1299875574894039184';
 const CO_DEVELOPER_ID = '742955843498278943';
 
-// Check if user is a developer
 function isDeveloper(userId) {
   return userId === DEVELOPER_ID || userId === CO_DEVELOPER_ID;
 }
 
-// === Server blacklist ===
 
-// Servers hardcoded as permanently blacklisted regardless of database state
 const HARDCODED_BLACKLISTED_SERVERS = new Set([
   '1029577794935595048'
 ]);
@@ -52,7 +49,6 @@ async function setServerBlacklist(guildId, blacklisted) {
   );
 }
 
-// === Prefix system (per-guild text command prefix) ===
 const PREFIX_CACHE = new Map();
 
 function validatePrefix(input) {
@@ -95,7 +91,6 @@ async function setGuildPrefix(guildId, prefix) {
 const token = process.env.DISCORD_BOT_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 
-// Validate required environment variables
 if (!token) {
   console.error('ERROR: DISCORD_BOT_TOKEN is not set in environment variables');
   process.exit(1);
@@ -105,7 +100,6 @@ if (!clientId) {
   console.error('ERROR: DISCORD_CLIENT_ID is not set in environment variables');
   process.exit(1);
 }
-// MongoDB connection
 let mongoClient;
 let db;
 let usersCollection;
@@ -119,7 +113,6 @@ let raidSeasonCollection;
 let raidPlayersCollection;
 let serverBlacklistCollection;
 
-// Initialize MongoDB connection
 async function initializeDatabase() {
   try {
     const mongoUri = process.env.MONGODB_URI;
@@ -148,7 +141,6 @@ async function initializeDatabase() {
     raidPlayersCollection     = db.collection('raidPlayers');
     serverBlacklistCollection = db.collection('serverBlacklist');
 
-    // Initialize event system if it doesn't exist
     const eventSystem = await eventSystemCollection.findOne({ _id: 'main' });
     if (!eventSystem) {
       await eventSystemCollection.insertOne({
@@ -160,15 +152,11 @@ async function initializeDatabase() {
       });
     }
 
-    // Health check: Test write and read permissions
     await performDatabaseHealthCheck();
 
-    // Add database connection diagnostics
     await logDatabaseDiagnostics();
 
-    // Initialize global items if they don't exist
     await initializeGlobalItems();
-    // Seed any items that must always exist (baits, future minigame items)
     await ensureGlobalItems();
 
   } catch (error) {
@@ -177,7 +165,6 @@ async function initializeDatabase() {
   }
 }
 
-// Global data objects (loaded from MongoDB)
 let userData = {};
 let cooldowns = { scavenge: {}, labor: {}, steal: {}, fish: {} };
 global.tempItems = {};
@@ -191,11 +178,9 @@ global.massSellSessions = {};
 global.activeFishSessions = {};
 global.activeRaidBrowseSessions = {};
 
-// === FISHING CONSTANTS ===
 
 const FISH_COOLDOWN = 20 * 60 * 1000; // 20 minutes
 
-// Each bait tier has a weight table (junk/common/uncommon/rare/legendary)
 const BAIT_CATALOG = {
   'Earthworm': {
     name: 'Earthworm', basePrice: 150, type: 'bait', category: 'minigame', emoji: '🪱',
@@ -219,7 +204,6 @@ const BAIT_CATALOG = {
   }
 };
 
-// Fish definitions per rarity tier
 const FISH_TABLE = {
   junk: [
     { name: 'Old Boot',           value: 0,  emoji: '🥾', description: 'A waterlogged boot. Not yours, thankfully.' },
@@ -282,9 +266,6 @@ function rollFishValue(fish) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// ============================================================
-// === RAID SEASON SYSTEM =====================================
-// ============================================================
 
 const RAID_UNITS = [
   { id: 'peasant_levy',   name: 'Peasant Levy',    cost: 100,  baseCP: 8,   archetype: 'mob',        ascii: ' ( o )\n  \\|/\n  / \\',   description: 'Conscripted farmers armed with whatever they could find. Individually unremarkable — but coin is scarce and bodies are not.' },
@@ -299,15 +280,6 @@ const RAID_UNITS = [
   { id: 'battle_mage',   name: 'Battle Mage',      cost: 3000, baseCP: 130, archetype: 'mystical',   ascii: ' (***)\n  ~|~\n  / \\',    description: 'A sorcerer who traded grimoires for war. Commands arcane force that tears through armour and morale in equal measure.' }
 ];
 
-// === ARCHETYPE SYSTEM ===================================================
-// Counter pairs (if A counters B): A gets x1.1 on its actual CP, B gets x0.9
-// Pairs:  ranged->mob, ranged->mounted, armored->ranged, phalanx->mounted,
-//         phalanx->vanguard, siege->armored, siege->phalanx,
-//         skirmisher->ranged, skirmisher->siege, veteran->mob,
-//         veteran->skirmisher, vanguard->veteran, vanguard->mob,
-//         mounted->veteran, mounted->skirmisher,
-//         mystical->armored, mystical->vanguard, mystical->mounted
-// ========================================================================
 
 const RAID_ARCHETYPES = {
   mob: {
@@ -372,7 +344,6 @@ const RAID_ARCHETYPES = {
   }
 };
 
-// Narrative text for each directional counter pair (winner_loser)
 const RAID_COUNTER_NARRATIVES = {
   'ranged_mob':         'Bolts tear through the packed ranks before a single levy can close the gap. Range wins before the fight truly begins.',
   'ranged_mounted':     'Volleys of fire punish the charge while momentum is still building. Horse and rider go down before the line is reached.',
@@ -400,13 +371,11 @@ const BATTLE_SECTION_NAMES = [
   'THE REAR GUARD',    'THE OPEN FIELD',     'THE RIDGE LINE'
 ];
 
-// Generate up to 3 battle scene strings (one per meaningful archetype matchup)
 function generateBattleScenes(attackerData, defenderData, attackerName, defenderName, deployMerc) {
   const scenes      = [];
   const usedPairs   = new Set();
   const usedSections = [];
 
-  // Collect all meaningful matchups (where at least one side counters the other)
   const matchups = [];
   for (const uA of RAID_UNITS) {
     const aCount = (attackerData.soldiers?.[uA.id] || 0);
@@ -430,7 +399,6 @@ function generateBattleScenes(attackerData, defenderData, attackerName, defender
     if (usedPairs.has(pairKey) || usedPairs.has(pairKeyR)) continue;
     usedPairs.add(pairKey);
 
-    // Pick a unique section name
     let sectionName = BATTLE_SECTION_NAMES.find(s => !usedSections.includes(s)) || BATTLE_SECTION_NAMES[0];
     usedSections.push(sectionName);
 
@@ -462,7 +430,6 @@ function generateBattleScenes(attackerData, defenderData, attackerName, defender
     ].join('\n'));
   }
 
-  // Fallback if no archetype matchups existed
   if (scenes.length === 0) {
     scenes.push([
       '==========================================',
@@ -491,7 +458,6 @@ function generateBattleScenes(attackerData, defenderData, attackerName, defender
   return scenes;
 }
 
-// CP calculation that applies per-unit archetype multipliers based on enemy composition
 function calcRaidCPWithMatchups(attackerRaidData, defenderRaidData, deployMerc = false) {
   const defArchetypes = new Set();
   const attArchetypes = new Set();
@@ -540,11 +506,9 @@ const TRAINING_MULTIPLIERS = { 1: 1.00, 2: 1.20, 3: 1.40, 4: 1.65, 5: 2.00 };
 const TRAINING_COSTS       = { 2: 800, 3: 2500, 4: 7000, 5: 18000 };
 const TRAINING_LABELS      = { 2: 'Lv.2 (+20%)', 3: 'Lv.3 (+40%)', 4: 'Lv.4 (+65%)', 5: 'Lv.5 (+100%)' };
 
-// Season-end payout: $500 per raid completed, applied per win and per loss, capped at $5,000
 const RAID_PAYOUT_RATE = 500;
 const RAID_PAYOUT_CAP  = 5000;
 
-// --- Season state ---
 
 async function getRaidSeason() {
   if (!raidSeasonCollection) return { active: false, startedAt: null, endsAt: null, seasonId: 0 };
@@ -556,7 +520,6 @@ async function saveRaidSeason(data) {
   await raidSeasonCollection.replaceOne({ _id: 'main' }, { _id: 'main', ...data }, { upsert: true });
 }
 
-// --- Per-player raid data ---
 
 function defaultRaidPlayer(userId) {
   const soldiers = {}, trainingLevels = {};
@@ -578,7 +541,6 @@ async function getAllRaidPlayers() {
   return await raidPlayersCollection.find({}).toArray();
 }
 
-// --- CP calculation ---
 
 function calcRaidCP(raidData) {
   let relative = 0, actual = 0;
@@ -591,7 +553,6 @@ function calcRaidCP(raidData) {
   return { relative: Math.floor(relative), actual: Math.floor(actual) };
 }
 
-// --- Raid store section builder ---
 
 async function buildRaidStoreSection(raidSubTab, raidPage, userId) {
   const raidData  = await getRaidPlayer(userId);
@@ -673,7 +634,6 @@ async function buildRaidStoreSection(raidSubTab, raidPage, userId) {
     };
 
   } else {
-    // Mercenaries
     const owned = raidData.mercenariesOwned || 0;
     additionalComponents.push(new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('raid_hire_merc_1').setLabel(`Hire x1  ($${RAID_MERCENARY.cost.toLocaleString()})`).setStyle(ButtonStyle.Success),
@@ -694,17 +654,14 @@ async function buildRaidStoreSection(raidSubTab, raidPage, userId) {
   }
 }
 
-// Graceful shutdown handler for Railway deployment
 async function gracefulShutdown(signal) {
   console.log(`🔄 Received ${signal}, performing graceful shutdown...`);
 
   try {
-    // Save all pending data
     console.log('💾 Saving all user data before shutdown...');
     await saveUserData();
     await saveCooldowns();
 
-    // Close MongoDB connection
     if (mongoClient) {
       console.log('🔌 Closing MongoDB connection...');
       await mongoClient.close();
@@ -718,12 +675,10 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// Set up process handlers for Railway
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // Nodemon restart
 
-// Database helper functions
 async function getUser(userId) {
   if (!userData[userId]) {
     console.log(`🔍 Loading user ${userId} from database...`);
@@ -759,7 +714,6 @@ async function saveUser(userId) {
       );
       console.log(`💾 Save result for ${userId}: Matched=${result.matchedCount}, Upserted=${result.upsertedCount}`);
 
-      // Verify the save worked
       const verification = await usersCollection.findOne({ _id: userId });
       console.log(`🔍 Verification read for ${userId}:`, JSON.stringify(verification, null, 2));
     } catch (error) {
@@ -779,7 +733,6 @@ async function getCooldowns() {
     return defaults;
   }
 
-  // Merge with defaults to ensure all keys exist, even in old documents
   return {
     scavenge: cooldownDoc.scavenge || {},
     labor: cooldownDoc.labor || {},
@@ -852,7 +805,6 @@ async function saveGuildItems(guildId, items) {
   }
 }
 
-// Global Items System
 async function initializeGlobalItems() {
   try {
     const globalItems = await globalItemsCollection.findOne({ _id: 'main' });
@@ -877,8 +829,6 @@ async function initializeGlobalItems() {
   }
 }
 
-// Upserts any items that should always exist in the global store (baits, etc.)
-// Uses $set so new items are added without touching existing ones.
 async function ensureGlobalItems() {
   const setFields = {};
   for (const [key, val] of Object.entries(BAIT_CATALOG)) {
@@ -897,7 +847,6 @@ async function getGlobalItems() {
   return globalDoc?.items || {};
 }
 
-// Bank Expansion System
 async function calculateBankCapacity(userId) {
   const user = await getUser(userId);
   const expansions = user.bankExpansions || 0;
@@ -931,7 +880,6 @@ async function purchaseBankExpansion(userId) {
       return { success: false, error: 'insufficient_funds', price, cash: user.cash };
     }
 
-    // Process purchase
     user.cash -= price;
     user.bankExpansions = currentExpansions + 1;
     await saveUser(userId);
@@ -950,7 +898,6 @@ async function purchaseBankExpansion(userId) {
   }
 }
 
-// Database connection diagnostics
 async function logDatabaseDiagnostics() {
   try {
     console.log('📊 MongoDB Connection Diagnostics:');
@@ -959,7 +906,6 @@ async function logDatabaseDiagnostics() {
     const userCount = await usersCollection.countDocuments();
     console.log(`   Users collection: ${userCount} documents`);
 
-    // Check connection status and authentication
     const connStatus = await db.admin().command({ connectionStatus: 1 });
     if (connStatus.authInfo && connStatus.authInfo.authenticatedUsers) {
       const users = connStatus.authInfo.authenticatedUsers;
@@ -978,12 +924,10 @@ async function logDatabaseDiagnostics() {
   }
 }
 
-// Database health check function
 async function performDatabaseHealthCheck() {
   try {
     console.log('🏥 Performing MongoDB health check...');
 
-    // Test write permission
     const testDoc = { _id: 'health_check', timestamp: Date.now(), test: 'write_read_test' };
     const writeResult = await usersCollection.replaceOne(
       { _id: 'health_check' },
@@ -993,13 +937,11 @@ async function performDatabaseHealthCheck() {
 
     console.log(`✅ Write test - Matched: ${writeResult.matchedCount}, Upserted: ${writeResult.upsertedCount}`);
 
-    // Test read permission
     const readResult = await usersCollection.findOne({ _id: 'health_check' });
 
     if (readResult && readResult.test === 'write_read_test') {
       console.log('✅ Read test - SUCCESS');
 
-      // Clean up test document
       await usersCollection.deleteOne({ _id: 'health_check' });
       console.log('✅ Database health check PASSED - Read/Write permissions confirmed');
     } else {
@@ -1014,7 +956,6 @@ async function performDatabaseHealthCheck() {
   }
 }
 
-// Legacy save functions (now async and use MongoDB)
 async function saveUserData() {
   if (!usersCollection) {
     console.warn('Users collection not ready, skipping save');
@@ -1030,7 +971,6 @@ async function saveUserData() {
   }
 }
 
-// Rarity and artefact config
 const rarities = [
   { name:'1-Star', chance:65, color:0xAAAAAA, value:100,   sell:150,   stars:1, items:['Quartz','Mica','Olivine','Condensed Quartz','Calcite Crystal','Feldspar','Flint Chip','Shale Flake','Agate Cluster','Basalt Prism','Diorite Slab','Lignite Chip','Travertine Fragment','Smoky Quartz','Sandstone Carving','Pumice Dome'] },
   { name:'2-Star', chance:20, color:0x00FF00, value:500,   sell:500,   stars:2, items:['Garnet','Talc','Magnetite','Lithium Battery','Hornblende','Limestone Tablet','Serpentine','Ring of Malachite','Jade Scarab','Dolomite Tablet','Augite Crystal','Stibnite Wand','Chalcopyrite','Crown of Gypsum','Rhodochrosite'] },
@@ -1039,9 +979,7 @@ const rarities = [
   { name:'5-Star', chance:1,  color:0x000000, value:10000, sell:10000, stars:5, items:['Gem of Diamond','Kyawthuite','Hazenite Droplet','Ephemeral Allanite','Meteorite Shard','Coesite Fragment','Painite Crystal','Scepter of Onyx','Primordial Opal','Musgravite Fragment','Pezzottaite Core','Void Calcite','Serendibite Relic','Grandidierite Prism','Stellar Obsidian'] }
 ];
 
-// Tier for each artefact — T1=65% value, T2=75%, T3=100%, T4=125%, T5=135%
 const artefactTiers = {
-  // 1-Star
   'Quartz': 2, 'Mica': 2, 'Olivine': 2,
   'Condensed Quartz': 2,
   'Calcite Crystal': 3,
@@ -1049,14 +987,12 @@ const artefactTiers = {
   'Agate Cluster': 3, 'Basalt Prism': 3,
   'Diorite Slab': 4, 'Lignite Chip': 4, 'Travertine Fragment': 4,
   'Smoky Quartz': 5, 'Sandstone Carving': 5, 'Pumice Dome': 5,
-  // 2-Star
   'Garnet': 2, 'Talc': 2, 'Magnetite': 2,
   'Lithium Battery': 3,
   'Hornblende': 1, 'Limestone Tablet': 1, 'Serpentine': 1,
   'Ring of Malachite': 3, 'Jade Scarab': 3,
   'Dolomite Tablet': 4, 'Augite Crystal': 4, 'Stibnite Wand': 4,
   'Chalcopyrite': 5, 'Crown of Gypsum': 5, 'Rhodochrosite': 5,
-  // 3-Star
   'Eye of Monazite': 2, 'Chest of Xenotime': 2, 'Euxenite': 2,
   'Beryl': 1,
   'Loparite': 3,
@@ -1064,7 +1000,6 @@ const artefactTiers = {
   'Scepter of Rhodonite': 3, 'Turquoise Idol': 3,
   'Spectrolite Lens': 4, 'Vanadinite Cluster': 4, 'Wulfenite Plate': 4,
   'Brazilianite Shard': 5, 'Mask of Dioptase': 5, 'Alexandrite Prism': 5,
-  // 4-Star
   'Watch of Scandium': 2, 'Statue of Bastnasite': 2, 'Allanite': 2,
   'Fluorite Shard': 1, 'Nephrite Goblet': 1,
   'Ixiolite': 2,
@@ -1073,7 +1008,6 @@ const artefactTiers = {
   'Staff of Chrysoberyl': 3, 'Relic of Moissanite': 3,
   'Orb of Tanzanite': 4, 'Spessartine Dagger': 4, 'Demantoid Shard': 4,
   'Crown of Benitoite': 5, 'Throne of Jadeite': 5, 'Taaffeite Pendant': 5,
-  // 5-Star
   'Gem of Diamond': 2, 'Kyawthuite': 2,
   'Hazenite Droplet': 1,
   'Ephemeral Allanite': 3,
@@ -1100,8 +1034,6 @@ function calcArtefactSellValue(name, rarity) {
   return Math.floor(base * TIER_MULTIPLIERS[tier] * mult);
 }
 
-// Trade-only value: includes the 5× shiny premium displayed in trade embeds/pickers.
-// Do NOT use this for /sell, /inventory, or scavenge — those apply their own shiny bonus.
 function calcArtefactTradeValue(name, rarity) {
   const isShiny = name.startsWith('✨ SHINY ') && name.endsWith(' ✨');
   const base = calcArtefactSellValue(name, rarity);
@@ -1120,16 +1052,10 @@ function getRarityByArtefact(name) {
   return rarities.find(r => r.items.includes(cleanName));
 }
 
-// === MARKET SYSTEM ===
-// Per-artefact price multipliers refreshed every 6 hours and persisted in MongoDB.
-// MARKET_CACHE is the in-memory copy that all sell/value helpers read from for speed.
 const MARKET_REFRESH_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 const MARKET_MULT_FLOOR = 0.4;
 const MARKET_MULT_CEILING = 3.0;
 
-// Per-rarity volatility profile applied each refresh.
-// `stay` = chance the multiplier is left unchanged this refresh.
-// Otherwise the price moves up or down by `swing` (50/50).
 const MARKET_VOLATILITY = {
   '1-Star': { stay: 0.90, swing: 0.02 },
   '2-Star': { stay: 0.80, swing: 0.05 },
@@ -1190,7 +1116,6 @@ async function loadMarketState() {
   MARKET_CACHE.lastCrashout = doc.lastCrashout || 0;
   MARKET_CACHE.crashoutHistory = Array.isArray(doc.crashoutHistory) ? doc.crashoutHistory : [];
 
-  // Backfill any newly-added artefacts with a neutral 1.0 multiplier
   let added = false;
   for (const name of getAllArtefactNames()) {
     if (typeof MARKET_CACHE.multipliers[name] !== 'number') {
@@ -1241,16 +1166,11 @@ async function maybeRefreshMarket() {
   }
 }
 
-// === MARKET CRASHOUT EVENTS ===
-// Once per week a random rarity tier is hit by a Market Crash (-10%) or
-// a Speculative Bubble (+15%). The shift is applied to every artefact in
-// that rarity by multiplying their current multiplier and clamping.
 const CRASHOUT_INTERVAL = 7 * 24 * 60 * 60 * 1000; // 7 days
 const CRASHOUT_CRASH_FACTOR = 0.85;   // -15%
 const CRASHOUT_BUBBLE_FACTOR = 1.10;  // +10%
 const CRASHOUT_HISTORY_LIMIT = 10;
 
-// In-memory cache for per-guild announcement channels (mirror of guildSettings)
 const ANNOUNCEMENT_CACHE = new Map(); // guildId -> channelId | null
 
 async function getAnnouncementChannelId(guildId) {
@@ -1278,10 +1198,6 @@ async function setAnnouncementChannelId(guildId, channelId) {
   ANNOUNCEMENT_CACHE.set(guildId, channelId);
 }
 
-// ===== Daily Quests System =====
-// 9 personal quests/day per player (3 action, 3 economy, 3 social) + 1 shared
-// community quest per guild/day. Personal completion -> DM the player.
-// Community completion -> announce in the guild's announcement channel.
 
 const QUEST_SECTION_BONUS_CASH = 300;
 const QUEST_SECTION_BONUS_XP = 5;
@@ -1534,14 +1450,11 @@ async function broadcastToAnnouncementChannels(embed) {
 async function runCrashout() {
   if (!marketStateCollection) return null;
 
-  // Pick a random rarity uniformly
   const rarity = rarities[Math.floor(Math.random() * rarities.length)];
-  // 50/50 crash vs bubble
   const isBubble = Math.random() < 0.5;
   const factor = isBubble ? CRASHOUT_BUBBLE_FACTOR : CRASHOUT_CRASH_FACTOR;
   const type = isBubble ? 'bubble' : 'crash';
 
-  // Apply factor to every artefact in that rarity
   const updated = { ...MARKET_CACHE.multipliers };
   for (const item of rarity.items) {
     const current = updated[item] ?? 1.0;
@@ -1570,7 +1483,6 @@ async function runCrashout() {
 
   console.log(`Crashout event: ${type.toUpperCase()} on ${rarity.name} (factor ${factor})`);
 
-  // Build announcement embed and broadcast
   const pctLabel = isBubble ? '+10%' : '-15%';
   const embed = new EmbedBuilder()
     .setTitle(isBubble ? 'Speculative Bubble!' : 'Market Crash!')
@@ -1608,10 +1520,6 @@ async function maybeRunCrashout() {
   }
 }
 
-// === ARTEFACT SETS ===
-// Each set is a curated grouping of artefacts spanning multiple rarities.
-// Selling a complete copy of a set in a single transaction grants a 20%
-// "Collector's Premium" on the value of those items.
 const COLLECTORS_PREMIUM = 0.20;
 
 const ARTEFACT_SETS = {
@@ -1657,7 +1565,6 @@ const ARTEFACT_SETS = {
   }
 };
 
-// Reverse lookup: artefact name -> set id
 const ITEM_TO_SET = {};
 for (const [setId, set] of Object.entries(ARTEFACT_SETS)) {
   for (const item of set.items) ITEM_TO_SET[item] = setId;
@@ -1673,12 +1580,7 @@ function getSetIdForItem(name) {
   return ITEM_TO_SET[stripShinyName(name)] || null;
 }
 
-// Given a flat list of {name, sellValue} representing every individual item
-// being sold in this transaction, compute the Collector's Premium bonus
-// and a per-set breakdown for the receipt.
 function computeCollectorsPremium(soldItems) {
-  // Group sold items by base name; sort each group highest-value first so
-  // shiny copies are consumed for the bonus before plain ones (player-friendly).
   const byBase = {};
   for (const item of soldItems) {
     const base = stripShinyName(item.name);
@@ -1718,8 +1620,6 @@ function computeCollectorsPremium(soldItems) {
   return { totalBonus: Math.floor(totalBonus), breakdown };
 }
 
-// Given a player's full artefact array, return per-set progress for the
-// /collection "Sets" page.
 function computeSetProgress(playerArtefacts) {
   const counts = {};
   for (const a of (playerArtefacts || [])) {
@@ -1743,24 +1643,19 @@ function computeSetProgress(playerArtefacts) {
 }
 
 
-// === EVENT SYSTEM ===
 
-// Get all possible artefacts from all rarities
 function getAllArtefacts() {
   return rarities.flatMap(rarity => rarity.items);
 }
 
-// Check and handle event system
 async function checkAndHandleEvents() {
   const now = Date.now();
   const eventData = await getEventSystem();
 
-  // Check if current event should end
   if (eventData.currentEvent && now >= eventData.currentEvent.endTime) {
     await endCurrentEvent();
   }
 
-  // Check if new event should start
   if (!eventData.currentEvent && now >= eventData.nextEventTime) {
     await startNewEvent();
   }
@@ -1770,7 +1665,6 @@ async function startNewEvent() {
   const allArtefacts = getAllArtefacts();
   const now = Date.now();
 
-  // Randomly select two different artefacts
   const shuffledArtefacts = [...allArtefacts].sort(() => Math.random() - 0.5);
   const negativeArtefact = shuffledArtefacts[0];
   const positiveArtefact = shuffledArtefacts[1];
@@ -1790,7 +1684,6 @@ async function startNewEvent() {
   eventData.nextEventTime = now + (4 * 24 * 60 * 60 * 1000); // Next event in 4 days
   eventData.eventHistory.unshift(newEvent);
 
-  // Keep only last 10 events in history
   if (eventData.eventHistory.length > 10) {
     eventData.eventHistory = eventData.eventHistory.slice(0, 10);
   }
@@ -1811,7 +1704,6 @@ async function endCurrentEvent() {
 
 async function broadcastEventStart(event) {
   try {
-    // Create event start embed
     const eventEmbed = new EmbedBuilder()
       .setTitle('MINING CRISIS ALERT!')
       .setDescription(`**A catastrophic mine collapse has occurred in the ${event.negativeArtefact} mining sector!**`)
@@ -1898,29 +1790,24 @@ async function broadcastEventEnd(event) {
   }
 }
 
-// Modified scavenge function to account for events
 async function getModifiedArtefactChances() {
   const eventData = await getEventSystem();
   const event = eventData.currentEvent;
   if (!event) return rarities; // No event active, return normal chances
 
-  // Create modified rarities based on current event
   return rarities.map(rarity => {
     const modifiedItems = rarity.items.map(item => {
       if (item === event.negativeArtefact) {
-        // This artefact cannot be found during the event
         return null;
       }
       return item;
     }).filter(item => item !== null);
 
-    // If positive artefact is in this rarity, double its effective chance
     const hasPositiveArtefact = rarity.items.includes(event.positiveArtefact);
 
     return {
       ...rarity,
       items: modifiedItems,
-      // If this rarity contains the positive artefact, increase its chance
       chance: hasPositiveArtefact ? rarity.chance * 1.5 : rarity.chance
     };
   }).filter(rarity => rarity.items.length > 0); // Remove rarities with no items
@@ -1934,15 +1821,11 @@ const client = new Client({
   ]
 });
 
-// XP System - Message tracking for conversation detection
 client.on('messageCreate', async (message) => {
-  // Ignore bot messages
   if (message.author.bot) return;
 
-  // Database not ready yet — ignore until fully initialised
   if (!usersCollection) return;
 
-  // Server blacklist gate — notify and block activity from blacklisted servers
   if (message.guildId && await isServerBlacklisted(message.guildId)) {
     await message.reply({ embeds: [new EmbedBuilder()
       .setTitle('Server Blacklisted')
@@ -1952,7 +1835,6 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // === Prefix command dispatch ===
   if (message.guildId) {
     try {
       const prefix = await getGuildPrefix(message.guildId);
@@ -1973,37 +1855,29 @@ client.on('messageCreate', async (message) => {
   const channelId = message.channel.id;
   const now = Date.now();
 
-  // Load user data from database first
   const user = await getUser(userId);
   if (!user.xpData) user.xpData = { xp: 0, messageCount: 0, lastMessage: 0 };
 
-  // Initialize channel tracking
   if (!global.messageTracker[channelId]) global.messageTracker[channelId] = [];
 
-  // Add this message to channel tracker
   global.messageTracker[channelId].push({
     userId: userId,
     timestamp: now
   });
 
-  // Clean old messages (only keep last 5 minutes)
   global.messageTracker[channelId] = global.messageTracker[channelId].filter(
     msg => now - msg.timestamp < 300000 // 5 minutes
   );
 
-  // Check if this is part of a conversation
   const recentMessages = global.messageTracker[channelId].filter(
     msg => now - msg.timestamp < 120000 // 2 minutes
   );
 
-  // Get unique users who have sent messages in the last 2 minutes
   const uniqueUsers = new Set(recentMessages.map(msg => msg.userId));
 
-  // Only award XP if there's a conversation (at least 2 different users)
   if (uniqueUsers.size >= 2) {
     user.xpData.messageCount++;
 
-    // Award XP every 2 messages
     if (user.xpData.messageCount % 2 === 0) {
       user.xpData.xp++;
       user.xpData.lastMessage = now;
@@ -2016,21 +1890,16 @@ client.on('messageCreate', async (message) => {
 client.once('clientReady', async () => {
   console.log(`Fortune Bot online as ${client.user.tag}`);
 
-  // Initialize MongoDB connection
   await initializeDatabase();
 
-  // Load cooldowns from database
   cooldowns = await getCooldowns();
 
-  // Initialize event system checking
   checkAndHandleEvents();
 
-  // Set up periodic event checking every 15 minutes
   setInterval(() => {
     checkAndHandleEvents();
   }, 15 * 60 * 1000);
 
-  // Initialize market state and start periodic refresh checks
   await loadMarketState();
   await maybeRefreshMarket();
   await maybeRunCrashout();
@@ -2039,7 +1908,6 @@ client.once('clientReady', async () => {
     maybeRunCrashout();
   }, 60 * 1000);
 
-  // Register all slash commands
   const commands = [
     new SlashCommandBuilder()
       .setName('info')
@@ -2313,8 +2181,6 @@ client.once('clientReady', async () => {
 
   ];
 
-  // True developer-only commands — hidden from everyone by default via defaultMemberPermissions(0)
-  // Only registered as guild commands in guilds where a developer is present
   const devCommands = [
     new SlashCommandBuilder()
       .setName('give-artefact')
@@ -2447,7 +2313,6 @@ client.once('clientReady', async () => {
           )),
   ];
 
-  // Non-developer commands that were previously grouped with dev commands
   const extraPublicCommands = [
     new SlashCommandBuilder()
       .setName('setprefix')
@@ -2472,17 +2337,13 @@ client.once('clientReady', async () => {
   try {
     console.log('Started refreshing application (/) commands.');
 
-    // Register only public commands globally — dev commands are never registered globally
     await rest.put(Routes.applicationCommands(clientId), {
       body: allPublicCommands.map(command => command.toJSON())
     });
 
-    // Register developer commands guild-specifically, only in guilds where a developer is present
-    // defaultMemberPermissions(0) ensures they are hidden from everyone (including admins) by default
     const guilds = client.guilds.cache;
     for (const [guildId, guild] of guilds) {
       try {
-        // Fetch guild members if not cached
         if (!guild.members.cache.has(DEVELOPER_ID) && !guild.members.cache.has(CO_DEVELOPER_ID)) {
           try {
             await guild.members.fetch();
@@ -2491,7 +2352,6 @@ client.once('clientReady', async () => {
           }
         }
 
-        // Check if any developer is in this guild
         const hasDevelopers = guild.members.cache.has(DEVELOPER_ID) ||
                               guild.members.cache.has(CO_DEVELOPER_ID);
 
@@ -2514,9 +2374,7 @@ client.once('clientReady', async () => {
   }
 });
 
-// Handle autocomplete interactions
 client.on('interactionCreate', async interaction => {
-  // Database not ready yet — respond gracefully instead of crashing
   if (!usersCollection) {
     if (interaction.isAutocomplete()) {
       await interaction.respond([]);
@@ -2529,8 +2387,6 @@ client.on('interactionCreate', async interaction => {
     return;
   }
 
-  // Server blacklist gate — notify and block interactions from blacklisted servers
-  // Developer interactions bypass the gate so the command itself remains usable
   if (interaction.guildId && !isDeveloper(interaction.user.id)) {
     if (await isServerBlacklisted(interaction.guildId)) {
       if (interaction.isRepliable()) {
@@ -2565,12 +2421,10 @@ client.on('interactionCreate', async interaction => {
     }
   }
 
-  // Handle select menu interactions
   if (interaction.isStringSelectMenu()) {
     return await handleComponentInteraction(interaction);
   }
 
-  // Handle button interactions
   if (interaction.isButton()) {
     return await handleComponentInteraction(interaction);
   }
@@ -2619,7 +2473,6 @@ client.on('interactionCreate', async interaction => {
 
       const user = await getUser(session.userId);
 
-      // Count how many are available (owned minus already queued)
       const owned = user.artefacts.filter(a => a === session.selectedArtefact).length;
       const alreadyQueued = session.queue.find(e => e.name === session.selectedArtefact)?.amount || 0;
       const available = owned - alreadyQueued;
@@ -2682,9 +2535,6 @@ client.on('interactionCreate', async interaction => {
       const rawQuery = (interaction.fields.getTextInputValue('trade_picker_search_input') || '').trim();
       picker.query = rawQuery;
       picker.page = 0;
-      // Modal submitted from a button on the picker — interaction.update edits
-      // that originating ephemeral message via this interaction's webhook,
-      // which is more reliable than the legacy stored-Message.edit path.
       await interaction.update(buildTradePickerPayload(trade, userId));
       return;
     }
@@ -2843,7 +2693,6 @@ client.on('interactionCreate', async interaction => {
 
   if (!interaction.isChatInputCommand()) return;
 
-  // Acknowledge ALL commands immediately to prevent timeout  
   if (interaction.commandName === 'buy' || interaction.commandName === 'add-item' || interaction.commandName === 'fish') {
     await interaction.deferReply();
   }
@@ -2851,20 +2700,16 @@ client.on('interactionCreate', async interaction => {
     await interaction.deferReply();
   }
 
-  // Developer commands get ephemeral replies
   if (interaction.commandName === 'reset-cooldowns') {
     await interaction.deferReply({ ephemeral: true });
   }
 
   const userId = interaction.user.id;
-  // Load user data from database before processing any command
   await getUser(userId);
 
-  // Increment command counter (persisted on next natural save)
   if (!userData[userId].commandCount) userData[userId].commandCount = 0;
   userData[userId].commandCount++;
 
-  // Seed joinedDate for existing users who predate the field
   if (!userData[userId].joinedDate) {
     userData[userId].joinedDate = Date.now();
   }
@@ -3061,7 +2906,6 @@ client.on('interactionCreate', async interaction => {
   }
 });
 
-// === MODERATION COMMAND HANDLERS ===
 
 async function handleGiveRolesCommand(interaction) {
   if (!isDeveloper(interaction.user.id) && !interaction.member?.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -3098,7 +2942,6 @@ async function handleGiveRolesCommand(interaction) {
 
   const botHighestRole = botMember.roles.highest;
 
-  // ALL roles except @everyone, sorted highest to lowest
   const allRoles = [...interaction.guild.roles.cache
     .filter(role => role.id !== interaction.guild.id)
     .sort((a, b) => b.position - a.position)
@@ -3185,7 +3028,6 @@ async function handleGiveRolesCommand(interaction) {
 
     const rows = [new ActionRowBuilder().addComponents(selectMenu)];
 
-    // Mode toggle + pagination row
     const addBtn = new ButtonBuilder()
       .setCustomId(`gr_mode_add_${interaction.id}`)
       .setLabel('➕ Add')
@@ -3292,7 +3134,6 @@ async function handleGiveRolesCommand(interaction) {
         }
       }
 
-      // Refresh member roles after change
       try { await targetMember.fetch(); } catch (_) {}
 
       const actionWord = mode === 'add' ? 'Added' : 'Removed';
@@ -3314,7 +3155,6 @@ async function handleGiveRolesCommand(interaction) {
         .setColor(succeeded.length ? (mode === 'add' ? 0x57F287 : 0xFF6B6B) : 0x99AAB5)
         .setTimestamp();
 
-      // Keep menu open so they can keep managing
       await i.update({ embeds: [confirmEmbed, buildEmbed(currentPage)], components: buildComponents(currentPage) });
     }
   });
@@ -3502,7 +3342,6 @@ async function handleBanCommand(interaction) {
   }
 }
 
-// Command handlers
 async function handleSetPrefixCommand(interaction) {
   if (!isDeveloper(interaction.user.id) && !interaction.member?.permissions.has(PermissionFlagsBits.Administrator)) {
     return await interaction.reply({
@@ -3685,7 +3524,6 @@ class MessageInteractionAdapter {
   }
 
   async showModal(_modal) {
-    // Modals require an interaction context; not supported from message-based commands.
     try {
       await this.message.reply('This action requires using the slash-command version.');
     } catch (_) {}
@@ -3829,7 +3667,6 @@ async function handleSetAnnouncementsCommand(interaction) {
 
   const channel = interaction.options.getChannel('channel');
 
-  // No channel = clear
   if (!channel) {
     await setAnnouncementChannelId(interaction.guildId, null);
     return await interaction.reply({
@@ -3842,7 +3679,6 @@ async function handleSetAnnouncementsCommand(interaction) {
     });
   }
 
-  // Verify the bot can actually post there
   try {
     const me = interaction.guild.members.me;
     const perms = channel.permissionsFor(me);
@@ -3887,7 +3723,6 @@ async function handleMarketCommand(interaction) {
       return `${m}m`;
     };
 
-    // Build per-artefact rows: name, rarity, current mult, change since last refresh
     const rows = [];
     for (const r of rarities) {
       for (const item of r.items) {
@@ -4064,7 +3899,6 @@ async function handleInfoCommand(interaction) {
   await interaction.reply({ embeds: [infoEmbed] });
 }
 
-// Banking command handlers
 async function handleBankCommand(interaction, userId) {
   const amount = interaction.options.getInteger('amount');
 
@@ -4072,7 +3906,6 @@ async function handleBankCommand(interaction, userId) {
   const bankCapacity = await calculateBankCapacity(userId);
   const maxDeposit = bankCapacity - currentBank;
 
-  // Check bank capacity
   if (amount > maxDeposit) {
     const expansions = userData[userId].bankExpansions || 0;
     const capacityEmbed = new EmbedBuilder()
@@ -4092,7 +3925,6 @@ async function handleBankCommand(interaction, userId) {
     return await interaction.reply({ embeds: [capacityEmbed] });
   }
 
-  // Check sufficient cash
   if (userData[userId].cash < amount) {
     const insufficientEmbed = new EmbedBuilder()
       .setTitle('Insufficient Cash')
@@ -4108,7 +3940,6 @@ async function handleBankCommand(interaction, userId) {
     return await interaction.reply({ embeds: [insufficientEmbed] });
   }
 
-  // Process deposit
   userData[userId].cash -= amount;
   userData[userId].bankBalance = currentBank + amount;
   await saveUserData();
@@ -4205,7 +4036,6 @@ async function handleWithdrawCommand(interaction, userId) {
   const amount = interaction.options.getInteger('amount');
   const currentBank = userData[userId].bankBalance || 0;
 
-  // Check sufficient bank funds
   if (amount > currentBank) {
     const insufficientEmbed = new EmbedBuilder()
       .setTitle('Insufficient Bank Funds')
@@ -4221,7 +4051,6 @@ async function handleWithdrawCommand(interaction, userId) {
     return await interaction.reply({ embeds: [insufficientEmbed] });
   }
 
-  // Process withdrawal
   userData[userId].bankBalance = currentBank - amount;
   userData[userId].cash += amount;
   await saveUserData();
@@ -4250,7 +4079,6 @@ async function handleStealCommand(interaction, userId) {
   const STEAL_COOLDOWN = 30 * 60 * 1000; // 30 minutes
   const now = Date.now();
 
-  // Check cooldown
   if (cooldowns.steal[userId] && (now - cooldowns.steal[userId]) < STEAL_COOLDOWN) {
     const timeLeft = STEAL_COOLDOWN - (now - cooldowns.steal[userId]);
     const minutes = Math.floor(timeLeft / (60 * 1000));
@@ -4302,7 +4130,6 @@ async function handleStealCommand(interaction, userId) {
     return await interaction.reply({ embeds: [unavailableEmbed] });
   }
 
-  // Calculate success rate
   let successRate = Math.max(10, 80 - (amount / 20));
   successRate = Math.min(80, successRate);
 
@@ -4310,7 +4137,6 @@ async function handleStealCommand(interaction, userId) {
   const isSuccess = randomRoll <= successRate;
 
   if (isSuccess) {
-    // Process successful theft
     userData[targetId].cash -= amount;
     userData[userId].cash += amount;
     cooldowns.steal[userId] = now;
@@ -4334,7 +4160,6 @@ async function handleStealCommand(interaction, userId) {
 
     await interaction.reply({ embeds: [successEmbed] });
 
-    // Notify victim
     const victimEmbed = new EmbedBuilder()
       .setTitle('Theft Alert')
       .setDescription(`${interaction.user.username} has stolen $${amount.toLocaleString()} from your cash reserves.`)
@@ -4350,11 +4175,9 @@ async function handleStealCommand(interaction, userId) {
     try {
       await target.send({ embeds: [victimEmbed] });
     } catch (error) {
-      // User has DMs disabled
     }
 
   } else {
-    // Theft failed - still set cooldown
     cooldowns.steal[userId] = now;
     await saveCooldowns();
 
@@ -4375,7 +4198,6 @@ async function handleStealCommand(interaction, userId) {
   }
 }
 
-// Game command handlers
 async function handleScavengeCommand(interaction, userId) {
   await interaction.deferReply();
   const now = Date.now();
@@ -4399,14 +4221,11 @@ async function handleScavengeCommand(interaction, userId) {
     return await interaction.editReply({ embeds: [cooldownEmbed] });
   }
 
-  // Check for active events before scavenging
   await checkAndHandleEvents();
 
-  // Get modified chances based on current events
   const currentRarities = await getModifiedArtefactChances();
   const totalChance = currentRarities.reduce((sum, rarity) => sum + rarity.chance, 0);
 
-  // Random artefact generation with event modifications
   const random = Math.random() * totalChance;
   let selectedRarity = null;
   let cumulative = 0;
@@ -4420,13 +4239,11 @@ async function handleScavengeCommand(interaction, userId) {
   }
 
   if (!selectedRarity || selectedRarity.items.length === 0) {
-    // Fallback to common rarity if something goes wrong
     selectedRarity = rarities[0];
   }
 
   const artefact = selectedRarity.items[Math.floor(Math.random() * selectedRarity.items.length)];
 
-  // 0.5% chance for shiny version
   const isShiny = Math.random() < 0.005;
   const finalArtefactName = isShiny ? `✨ SHINY ${artefact} ✨` : artefact;
 
@@ -4448,7 +4265,6 @@ async function handleScavengeCommand(interaction, userId) {
     await updateQuestProgress(userId, interaction.guildId, 'findShiny', 1);
   }
 
-  // Check if this find was affected by events
   const eventData = await getEventSystem();
   const event = eventData ? eventData.currentEvent : null;
   let eventText = '';
@@ -4484,7 +4300,6 @@ async function handleScavengeCommand(interaction, userId) {
 
   await interaction.editReply({ embeds: [scavengeEmbed] });
 
-  // 20% chance to show server invite
   if (Math.random() < 0.20) {
     const inviteEmbed = new EmbedBuilder()
       .setTitle('✨ Join the Fortune Bot Community! ✨')
@@ -4541,7 +4356,6 @@ async function handleLaborCommand(interaction, userId) {
 
   await interaction.editReply({ embeds: [laborEmbed] });
 
-  // 20% chance to show server invite
   if (Math.random() < 0.20) {
     const inviteEmbed = new EmbedBuilder()
       .setTitle('✨ Join the Fortune Bot Community! ✨')
@@ -4555,7 +4369,6 @@ async function handleLaborCommand(interaction, userId) {
   }
 }
 
-// === INVENTORY HELPERS ===
 
 const INVENTORY_PAGE_SIZE = 12;
 
@@ -4586,11 +4399,9 @@ function getArtefactRarityRank(name) {
 function buildInventoryPayload(user, userXpData, bankCapacity, page) {
   const isShinyName = n => n.startsWith('✨ SHINY ') && n.endsWith(' ✨');
 
-  // Build counts map
   const counts = {};
   for (const name of user.artefacts) counts[name] = (counts[name] || 0) + 1;
 
-  // Sort by rarity rank then alphabetically within rank
   const uniqueNames = Object.keys(counts).sort((a, b) => {
     const diff = getArtefactRarityRank(a) - getArtefactRarityRank(b);
     return diff !== 0 ? diff : a.localeCompare(b);
@@ -4600,7 +4411,6 @@ function buildInventoryPayload(user, userXpData, bankCapacity, page) {
   const safePage = Math.max(0, Math.min(page, totalPages - 1));
   const pageNames = uniqueNames.slice(safePage * INVENTORY_PAGE_SIZE, (safePage + 1) * INVENTORY_PAGE_SIZE);
 
-  // Build artefact lines with blank-line spacers between rarity groups
   const lines = [];
   let lastRank = null;
   for (const name of pageNames) {
@@ -4619,14 +4429,12 @@ function buildInventoryPayload(user, userXpData, bankCapacity, page) {
     ? lines.join('\n')
     : (user.artefacts.length === 0 ? '*No artefacts yet — go scavenge!*' : '\u200b');
 
-  // Total collection value
   const totalValue = user.artefacts.reduce((sum, name) => {
     const rarity = getRarityByArtefact(name);
     const sell = calcArtefactSellValue(name, rarity);
     return sum + (isShinyName(name) ? sell * 5 : sell);
   }, 0);
 
-  // Purchased items
   const itemsCount = {};
   (user.items || []).forEach(item => { itemsCount[item] = (itemsCount[item] || 0) + 1; });
   const itemsList = (Object.entries(itemsCount)
@@ -4657,7 +4465,6 @@ function buildInventoryPayload(user, userXpData, bankCapacity, page) {
     .setFooter({ text: `⭐ 1-Star  ⭐⭐ 2-Star  ⭐⭐⭐ 3-Star  ⭐⭐⭐⭐ 4-Star  ⭐⭐⭐⭐⭐ 5-Star  ✨ Shiny  •  /convert: 1 XP = $2` })
     .setTimestamp();
 
-  // Navigation buttons (only show when there are multiple pages)
   const components = totalPages > 1 ? [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -4717,7 +4524,6 @@ async function handleTradeCommand(interaction, userId) {
     return await interaction.reply({ embeds: [botEmbed] });
   }
 
-  // Check if user is already in a trade
   const existingTrade = Object.values(global.activeTrades).find(trade => 
     trade.initiator === userId || trade.recipient === targetUser.id ||
     trade.initiator === targetUser.id || trade.recipient === userId
@@ -4733,12 +4539,8 @@ async function handleTradeCommand(interaction, userId) {
     return await interaction.reply({ embeds: [busyEmbed] });
   }
 
-  // Initialize target user data if needed
   if (!userData[targetUser.id]) userData[targetUser.id] = { cash: 0, artefacts: [], bankBalance: 0 };
 
-  // Create trade request for recipient to accept/decline.
-  // We encode BOTH ids in the customId so the handler can verify the clicker
-  // is actually the intended recipient (otherwise any bystander could accept).
   const acceptButton = new ButtonBuilder()
     .setCustomId(`trade_accept_${userId}_${targetUser.id}`)
     .setLabel('Accept Trade')
@@ -4771,12 +4573,8 @@ async function handleTradeCommand(interaction, userId) {
     fetchReply: true
   });
 
-  // Set timeout for trade request — disable the buttons if the recipient never
-  // responds. The previous version checked the wrong key (underscore separator
-  // vs the dash actually used by tradeId) so it was effectively dead code.
   setTimeout(async () => {
     const tradeId = `${userId}-${targetUser.id}`;
-    // Only disable if the recipient never accepted (no active session yet)
     if (global.activeTrades[tradeId]) return;
     try {
       const expiredEmbed = EmbedBuilder.from(tradeRequestEmbed)
@@ -4785,17 +4583,13 @@ async function handleTradeCommand(interaction, userId) {
         .spliceFields(3, 1, { name: 'Action Required', value: 'Run `/trade` again to start a new request.', inline: false });
       await requestMsg.edit({ embeds: [expiredEmbed], components: [] });
     } catch (e) {
-      // Message may have been deleted or already updated — safe to ignore
     }
   }, 120000); // 2 minutes
 }
 
 async function handleLeaderboardCommand(interaction) {
-  // Query all users directly from MongoDB so rankings persist across bot restarts
   const allDocs = await usersCollection.find({}, { projection: { cash: 1, bankBalance: 1 } }).toArray();
 
-  // Build entries, using the live in-memory cache where available so any
-  // recent changes that haven't been flushed yet are reflected accurately
   const entries = allDocs.map(doc => {
     const live = userData[doc._id];
     const cash = live !== undefined ? live.cash : (doc.cash || 0);
@@ -4830,7 +4624,6 @@ async function handleLeaderboardCommand(interaction) {
   await interaction.reply({ embeds: [leaderboardEmbed] });
 }
 
-// Build store nav row — active tab button is visually indicated via style
 function buildStoreNavRow(activeTab, raidActive = false) {
   const btns = [
     new ButtonBuilder()
@@ -4851,14 +4644,12 @@ function buildStoreNavRow(activeTab, raidActive = false) {
   return new ActionRowBuilder().addComponents(...btns);
 }
 
-// Build {embeds, components} for the store, given the active tab and fetched data
 async function buildStorePayload(tab, userId, guildId, globalItems, guildItems, raidSeason = null, raidSubTab = 'military', raidPage = 0) {
   const raidActive = !!(raidSeason && raidSeason.active);
   const navRow = buildStoreNavRow(tab, raidActive);
   const embeds = [];
 
   if (tab === 'economy') {
-    // --- Economy tab: Bank Expansion + server items ---
     const economyItems = Object.entries(globalItems).filter(([, item]) => item.type === 'bank_expansion');
 
     const itemBlocks = [];
@@ -4878,7 +4669,6 @@ async function buildStorePayload(tab, userId, guildId, globalItems, guildItems, 
       );
     }
 
-    // Server items
     const serverBlocks = Object.entries(guildItems).map(([name, data]) =>
       `**${name}**\nPrice: $${data.price.toLocaleString()}\n${data.description || 'No description'}`
     );
@@ -4909,7 +4699,6 @@ async function buildStorePayload(tab, userId, guildId, globalItems, guildItems, 
     return { embeds: raidEmbeds, components: [navRow, ...additionalComponents] };
 
   } else {
-    // --- Minigame Supplies tab: Bait ---
     const baitBlocks = Object.values(BAIT_CATALOG).map(bait => {
       const userItems = userData[userId]?.items || [];
       const owned = userItems.filter(i => i === bait.name).length;
@@ -4942,7 +4731,6 @@ async function buildStorePayload(tab, userId, guildId, globalItems, guildItems, 
   return { embeds, components: [navRow] };
 }
 
-// Simple helper: pack text blocks into ≤1024-char field values
 function chunkTextBlocks(blocks) {
   const chunks = [];
   let current = '';
@@ -5116,7 +4904,6 @@ async function handleBuyCommand(interaction, userId) {
   }
 }
 
-// === MASS SELL HELPERS ===
 
 function getMassSellValue(name) {
   const isShiny = name.startsWith('✨ SHINY ') && name.endsWith(' ✨');
@@ -5180,11 +4967,9 @@ function buildMassSellEmbed(session, userArtefacts) {
 }
 
 function buildMassSellComponents(sessionId, session, userArtefacts) {
-  // Count total owned per unique artefact name
   const ownedCounts = {};
   userArtefacts.forEach(name => { ownedCounts[name] = (ownedCounts[name] || 0) + 1; });
 
-  // Subtract already queued amounts to get available counts
   const availableCounts = { ...ownedCounts };
   session.queue.forEach(e => {
     if (availableCounts[e.name]) availableCounts[e.name] -= e.amount;
@@ -5192,11 +4977,9 @@ function buildMassSellComponents(sessionId, session, userArtefacts) {
 
   const allAvailable = Object.entries(availableCounts).filter(([, c]) => c > 0);
 
-  // Apply search filter
   const query = (session.searchQuery || '').trim();
   const filtered = query ? allAvailable.filter(([name]) => massSellMatchesQuery(name, query)) : allAvailable;
 
-  // Paginate (25 per page — Discord select menu limit)
   const PAGE_SIZE = 25;
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   if (typeof session.page !== 'number' || session.page < 0) session.page = 0;
@@ -5260,7 +5043,6 @@ function buildMassSellComponents(sessionId, session, userArtefacts) {
       .setStyle(ButtonStyle.Danger)
   ));
 
-  // Search & pagination row — only render when useful
   const showSearchRow = allAvailable.length > 0 && (allAvailable.length > PAGE_SIZE || query.length > 0);
   if (showSearchRow) {
     const searchLabel = query
@@ -5292,7 +5074,6 @@ function buildMassSellComponents(sessionId, session, userArtefacts) {
   return rows;
 }
 
-// New command handlers
 async function handleMassSellCommand(interaction, userId) {
   const user = await getUser(userId);
 
@@ -5502,7 +5283,6 @@ async function handleMassSellCommand(interaction, userId) {
 }
 
 async function handleAddItemCommand(interaction) {
-  // Use guildId directly (always available) instead of guild object
   const guildId = interaction.guildId;
 
   if (!guildId) {
@@ -5515,7 +5295,6 @@ async function handleAddItemCommand(interaction) {
     return await interaction.editReply({ embeds: [dmEmbed] });
   }
 
-  // Check if user is admin
   if (interaction.user.id !== DEVELOPER_ID && !interaction.member?.permissions.has('Administrator')) {
     const noPermEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -5561,7 +5340,6 @@ async function handleAddItemCommand(interaction) {
 }
 
 async function handleRemoveItemCommand(interaction) {
-  // Check if user is admin
   if (interaction.user.id !== DEVELOPER_ID && !interaction.member.permissions.has('Administrator')) {
     const noPermEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -5605,7 +5383,6 @@ async function handleRemoveItemCommand(interaction) {
 }
 
 async function handleViewItemsCommand(interaction) {
-  // Check if user is admin
   if (interaction.user.id !== DEVELOPER_ID && !interaction.member.permissions.has('Administrator')) {
     const noPermEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -5645,15 +5422,11 @@ async function handleViewItemsCommand(interaction) {
   await interaction.reply({ embeds: [viewEmbed] });
 }
 
-// Component interaction handler
 async function handleComponentInteraction(interaction) {
   const { customId } = interaction;
 
   try {
 
-  // Handle trade accept/decline
-  // customId format: `trade_accept_${initiatorId}_${recipientId}` so we can
-  // verify the clicker is actually the intended recipient.
   if (customId.startsWith('trade_accept_')) {
     const parts = customId.split('_');
     const initiatorId = parts[2];
@@ -5668,14 +5441,9 @@ async function handleComponentInteraction(interaction) {
 
     const recipientId = intendedRecipientId;
 
-    // Make sure the recipient has a userData record before they enter the trade —
-    // downstream handlers read userData[userId].cash without guarding.
     if (!userData[recipientId]) userData[recipientId] = { cash: 0, artefacts: [], bankBalance: 0 };
     if (!userData[initiatorId]) userData[initiatorId] = { cash: 0, artefacts: [], bankBalance: 0 };
 
-    // Create trade session
-    // NOTE: tradeId MUST NOT contain underscores — many handlers
-    // parse customIds with split('_'). Use '-' between the IDs.
     const tradeId = `${initiatorId}-${recipientId}`;
     global.activeTrades[tradeId] = {
       initiator: initiatorId,
@@ -5711,7 +5479,6 @@ async function handleComponentInteraction(interaction) {
 
     await interaction.update({ embeds: [declineEmbed], components: [] });
 
-  // === MARBLE GAME BUTTON HANDLERS ===
   } else if (customId.startsWith('marble_accept_')) {
     const gameId = customId.replace('marble_accept_', '');
     const game = global.activeMarbleGames[gameId];
@@ -5725,7 +5492,6 @@ async function handleComponentInteraction(interaction) {
 
     const userId = interaction.user.id;
 
-    // Check if this user was invited
     if (!game.invited.some(p => p.id === userId)) {
       return await interaction.reply({ 
         content: '❌ **Error:** You were not invited to this game!', 
@@ -5733,7 +5499,6 @@ async function handleComponentInteraction(interaction) {
       });
     }
 
-    // Check if already responded
     if (game.accepted.includes(userId) || game.declined.includes(userId)) {
       return await interaction.reply({ 
         content: '❌ **Error:** You have already responded to this invitation!', 
@@ -5741,15 +5506,11 @@ async function handleComponentInteraction(interaction) {
       });
     }
 
-    // Add to accepted list
     game.accepted.push(userId);
 
-    // Check if all players have accepted
     if (game.accepted.length === 3) {
-      // All players accepted — move to betting
       await startBettingPhase(interaction, gameId);
     } else {
-      // Update embed to show new acceptance
       const updatedEmbed = createInvitationEmbed(game);
       await interaction.update({ embeds: [updatedEmbed], components: [createInvitationButtons(gameId)] });
     }
@@ -5775,7 +5536,6 @@ async function handleComponentInteraction(interaction) {
       });
     }
 
-    // Game cancelled due to decline
     const declineEmbed = new EmbedBuilder()
       .setTitle('Marble Game Cancelled')
       .setDescription(`**${declinedUser.displayName}** has declined the invitation. The marble game has been cancelled.`)
@@ -5784,10 +5544,8 @@ async function handleComponentInteraction(interaction) {
 
     await interaction.update({ embeds: [declineEmbed], components: [] });
 
-    // Clean up the game
     delete global.activeMarbleGames[gameId];
 
-  // === MARBLE DUEL BUTTON HANDLERS ===
 
   } else if (customId.startsWith('duel_accept_')) {
     const gameId = customId.replace('duel_accept_', '');
@@ -5909,10 +5667,6 @@ async function handleComponentInteraction(interaction) {
   } else if (customId.startsWith('trade_add_cash_')) {
     await handleTradeAddCash(interaction, customId);
 
-  // IMPORTANT: the select-menu interactions also start with 'trade_add_artefact_' /
-  // 'trade_remove_artefact_' (specifically `trade_artefact_select_` and
-  // `trade_remove_artefact_select_`). The remove-select customId would otherwise
-  // be incorrectly matched here, so we explicitly exclude it.
   } else if (customId.startsWith('trade_add_artefact_') && !customId.startsWith('trade_add_artefact_select_')) {
     await handleTradeAddArtefact(interaction, customId);
 
@@ -5945,24 +5699,20 @@ async function handleComponentInteraction(interaction) {
     const offer = isInitiator ? trade.initiatorOffer : trade.recipientOffer;
     const userArtefacts = (userData[userId] && userData[userId].artefacts) || [];
 
-    // Validate count: how many do they own vs how many already in offer?
     const owned = userArtefacts.filter(a => a === artefact).length;
     const alreadyOffered = offer.artefacts.filter(a => a === artefact).length;
     const available = owned - alreadyOffered;
     if (available <= 0) {
-      // Re-render the picker so the now-exhausted item disappears from the dropdown
       return await interaction.update(buildTradePickerPayload(trade, userId));
     }
 
     if (available === 1) {
-      // Only one available — add it directly and refresh
       offer.artefacts.push(artefact);
       if (isInitiator) trade.initiatorReady = false;
       else trade.recipientReady = false;
       await interaction.update(buildTradePickerPayload(trade, userId));
       await refreshTradeMessage(trade);
     } else {
-      // Multiple available — ask how many via a modal
       if (!trade.pickers) trade.pickers = {};
       if (!trade.pickers[userId]) trade.pickers[userId] = { mode: 'add', query: '', page: 0, message: null };
       trade.pickers[userId].pendingAdd = artefact;
@@ -6003,14 +5753,12 @@ async function handleComponentInteraction(interaction) {
     }
 
     if (countInOffer === 1) {
-      // Only one — remove directly
       offer.artefacts.splice(offer.artefacts.indexOf(artefact), 1);
       if (isInitiator) trade.initiatorReady = false;
       else trade.recipientReady = false;
       await interaction.update(buildTradePickerPayload(trade, userId));
       await refreshTradeMessage(trade);
     } else {
-      // Multiple — ask how many to remove via a modal
       if (!trade.pickers) trade.pickers = {};
       if (!trade.pickers[userId]) trade.pickers[userId] = { mode: 'remove', query: '', page: 0, message: null };
       trade.pickers[userId].pendingRemove = artefact;
@@ -6082,7 +5830,6 @@ async function handleComponentInteraction(interaction) {
     const userId = interaction.user.id;
     const picker = trade && trade.pickers && trade.pickers[userId];
     if (!picker) return await interaction.deferUpdate();
-    // Optimistically increment; buildTradePickerComponents clamps to last page.
     picker.page = (picker.page || 0) + 1;
     await interaction.update(buildTradePickerPayload(trade, userId));
 
@@ -6107,7 +5854,6 @@ async function handleComponentInteraction(interaction) {
     const xpToConvert = userXpData.xp;
     const cashEarned = xpToConvert * 2;
 
-    // Convert XP to cash
     userData[userId].cash += cashEarned;
     userData[userId].xpData.xp = 0;
     await saveUserData();
@@ -6178,12 +5924,9 @@ async function handleComponentInteraction(interaction) {
     await interaction.update(payload);
 
   } else if (customId.startsWith('store_tab_raid_')) {
-    // Format: store_tab_raid_{subTab}_{page}  (subTab may contain underscores e.g. man_at_arms — but our sub-tab names are single words)
-    // 'store_tab_raid_open' is the top-level nav button — always opens military tab page 0
     let raidSubTab = 'military';
     let raidPage   = 0;
     if (customId !== 'store_tab_raid_open') {
-      // Strip _prev/_next suffix added to pagination buttons to avoid duplicate custom IDs
       const stripped = customId.replace(/_prev$/, '').replace(/_next$/, '');
       const inner    = stripped.replace('store_tab_raid_', '');
       const lastUnd  = inner.lastIndexOf('_');
@@ -6252,7 +5995,6 @@ async function handleComponentInteraction(interaction) {
     await handleRaidTutorialButton(interaction);
 
   } else if (customId.startsWith('raid_page_')) {
-    // Format: raid_page_{sessionId}_{page}
     const inner     = customId.replace('raid_page_', '');
     const lastUnd   = inner.lastIndexOf('_');
     const sessionId = inner.slice(0, lastUnd);
@@ -6403,7 +6145,6 @@ async function handleComponentInteraction(interaction) {
   }
 }
 
-// New Trade System Functions
 async function startInteractiveTrade(interaction, initiatorId, recipientId, tradeId) {
   const trade = global.activeTrades[tradeId];
   if (!trade) return;
@@ -6412,11 +6153,9 @@ async function startInteractiveTrade(interaction, initiatorId, recipientId, trad
   const components = createTradeComponents(tradeId);
 
   await interaction.update({ embeds: [tradeEmbed], components });
-  // Store reference to public message so ephemeral pickers can refresh it
   trade.message = interaction.message;
 }
 
-// Helper: refresh the public trade message after an offer changes
 async function refreshTradeMessage(trade) {
   if (!trade.message) return;
   try {
@@ -6429,7 +6168,6 @@ async function refreshTradeMessage(trade) {
   }
 }
 
-// Parse user-typed cash amounts: "1000", "1,000", "$1k", "2.5m", etc.
 function parseCashInput(raw) {
   const s = (raw || '').replace(/[$,\s]/g, '').toLowerCase();
   if (!s) return 0;
@@ -6444,7 +6182,6 @@ function parseCashInput(raw) {
   return parseInt(s, 10);
 }
 
-// Helper: case-insensitive match for trade artefact picker (mirrors mass-sell)
 function tradeMatchesQuery(name, query) {
   if (!query) return true;
   const clean = (name.startsWith('✨ SHINY ') && name.endsWith(' ✨'))
@@ -6454,7 +6191,6 @@ function tradeMatchesQuery(name, query) {
   return clean.toLowerCase().includes(q) || name.toLowerCase().includes(q);
 }
 
-// Helper: build the ephemeral artefact picker (used for both add and remove)
 function buildTradePickerComponents(tradeId, picker, entries, valueKey) {
   const PAGE_SIZE = 25;
   const query = (picker.query || '').trim();
@@ -6472,8 +6208,6 @@ function buildTradePickerComponents(tradeId, picker, entries, valueKey) {
       const tier = getArtefactTier(name);
       const val = calcArtefactTradeValue(name, rarity);
       const isShiny = name.startsWith('✨ SHINY ') && name.endsWith(' ✨');
-      // Discord caps select-option `value` at 100 chars; artefact names should
-      // already be well under that, but truncate defensively just in case.
       const safeValue = name.length > 100 ? name.slice(0, 100) : name;
       return {
         label: name.length > 100 ? name.slice(0, 97) + '...' : name,
@@ -6495,7 +6229,6 @@ function buildTradePickerComponents(tradeId, picker, entries, valueKey) {
     ));
   }
 
-  // Search & pagination row — only when useful
   const showSearchRow = entries.length > 0 && (entries.length > PAGE_SIZE || query.length > 0);
   if (showSearchRow) {
     const searchLabel = query
@@ -6527,7 +6260,6 @@ function buildTradePickerComponents(tradeId, picker, entries, valueKey) {
   return { rows, totalPages, filteredCount: filtered.length };
 }
 
-// Helper: build the ephemeral picker embed
 function buildTradePickerEmbed(picker, filteredCount, totalEntries) {
   const query = (picker.query || '').trim();
   const title = picker.mode === 'add' ? 'Add Artefact to Trade' : 'Remove Artefact from Offer';
@@ -6550,8 +6282,6 @@ function buildTradePickerEmbed(picker, filteredCount, totalEntries) {
     .setFooter({ text: 'This menu only you can see. Pick as many times as you want.' });
 }
 
-// Compute the entries list for a picker (add = available inventory minus what's
-// already in the offer; remove = what's currently in the offer).
 function computeTradePickerEntries(trade, userId, picker) {
   if (picker.mode === 'add') {
     const userArtefacts = userData[userId] && userData[userId].artefacts ? userData[userId].artefacts : [];
@@ -6567,11 +6297,6 @@ function computeTradePickerEntries(trade, userId, picker) {
   return Object.entries(offerCounts);
 }
 
-// Build the full {embeds, components} payload for the ephemeral picker message
-// in its current state. Used by all picker interactions to update via
-// `interaction.update(buildTradePickerPayload(...))` — the canonical pattern
-// for ephemeral messages, which avoids the unreliable stored-Message.edit()
-// path that previously left Prev/Next looking broken.
 function buildTradePickerPayload(trade, userId) {
   const picker = trade.pickers && trade.pickers[userId];
   if (!picker) return { embeds: [], components: [] };
@@ -6584,16 +6309,12 @@ function buildTradePickerPayload(trade, userId) {
   };
 }
 
-// Legacy: refresh an ephemeral picker via stored Message reference. Only kept
-// for code paths that don't have access to the current interaction (none today,
-// but it's a safe fallback). Prefer interaction.update(buildTradePickerPayload).
 async function refreshTradePicker(trade, userId) {
   const picker = trade.pickers && trade.pickers[userId];
   if (!picker || !picker.message) return;
   try {
     await picker.message.edit(buildTradePickerPayload(trade, userId));
   } catch (e) {
-    // Picker message may have been dismissed by the user — ignore
   }
 }
 
@@ -6610,7 +6331,6 @@ function formatOfferDetailed(offer) {
   const lines = [];
   if (offer.cash > 0) lines.push(`💰 **Cash** — $${offer.cash.toLocaleString()}`);
 
-  // Group artefacts by name preserving insertion order
   const counts = {};
   const order = [];
   for (const name of offer.artefacts) {
@@ -6635,7 +6355,6 @@ function formatOfferDetailed(offer) {
   }
 
   if (lines.length === 0) return '*Nothing offered yet*';
-  // Truncate to Discord embed field limit (1024 chars)
   const joined = lines.join('\n');
   if (joined.length <= 1024) return joined;
   const truncated = [];
@@ -6664,7 +6383,6 @@ function createTradeEmbed(trade, initiatorId, recipientId) {
   const initiatorStatus = trade.initiatorReady ? '✅ **Ready**' : '⏳ Preparing';
   const recipientStatus = trade.recipientReady ? '✅ **Ready**' : '⏳ Preparing';
 
-  // Value balance hint
   let balanceText = '';
   if (initiatorValue > 0 || recipientValue > 0) {
     const diff = initiatorValue - recipientValue;
@@ -6709,11 +6427,6 @@ function getTradeStatus(trade) {
   return 'Setting up offers...';
 }
 
-// The trade UI lives in a public message that BOTH players see, so the buttons
-// cannot have per-viewer disabled state — Discord renders the same components
-// for everyone. Each handler enforces "you cannot modify after marking ready"
-// itself with an ephemeral error if needed. We only globally disable the
-// action buttons when BOTH players are ready (trade is mid-execution).
 function createTradeComponents(tradeId) {
   const trade = global.activeTrades[tradeId];
   if (!trade) return [];
@@ -6817,7 +6530,6 @@ async function handleTradeAddArtefact(interaction, customId) {
     return await interaction.reply({ content: 'You have no artefacts to trade!', ephemeral: true });
   }
 
-  // Available = owned minus already in offer
   const offer = trade.initiator === userId ? trade.initiatorOffer : trade.recipientOffer;
   const ownedCounts = {};
   userArtefacts.forEach(n => { ownedCounts[n] = (ownedCounts[n] || 0) + 1; });
@@ -6828,7 +6540,6 @@ async function handleTradeAddArtefact(interaction, customId) {
     return await interaction.reply({ content: 'All your artefacts are already in this offer!', ephemeral: true });
   }
 
-  // Build / reuse picker state for this user
   if (!trade.pickers) trade.pickers = {};
   const picker = { mode: 'add', query: '', page: 0, message: null };
   trade.pickers[userId] = picker;
@@ -6926,16 +6637,13 @@ async function handleTradeReady(interaction, customId) {
 
   const isInitiator = trade.initiator === userId;
 
-  // Already ready — nothing to do (don't double-set or re-execute).
   if ((isInitiator && trade.initiatorReady) || (!isInitiator && trade.recipientReady)) {
     return await interaction.reply({ content: 'You are already marked ready.', ephemeral: true });
   }
 
-  // Validate that user has the items they're offering
   const userOffer = isInitiator ? trade.initiatorOffer : trade.recipientOffer;
   const userRecord = userData[userId] || { cash: 0, artefacts: [] };
 
-  // Check cash availability
   if (userOffer.cash > (userRecord.cash || 0)) {
     return await interaction.reply({
       content: `❌ You don't have enough cash! You're offering $${userOffer.cash.toLocaleString()} but only have $${(userRecord.cash || 0).toLocaleString()}`,
@@ -6943,7 +6651,6 @@ async function handleTradeReady(interaction, customId) {
     });
   }
 
-  // Check artefact availability — count-based so stacked offers validate correctly
   const _offerCounts = {};
   userOffer.artefacts.forEach(a => { _offerCounts[a] = (_offerCounts[a] || 0) + 1; });
   const _invCounts = {};
@@ -6978,7 +6685,6 @@ async function executeTrade(interaction, trade, tradeId) {
   const recipient = userData[trade.recipient];
 
   try {
-    // Final validation before executing trade
     if (trade.initiatorOffer.cash > initiator.cash) {
       throw new Error(`Initiator doesn't have enough cash`);
     }
@@ -6986,7 +6692,6 @@ async function executeTrade(interaction, trade, tradeId) {
       throw new Error(`Recipient doesn't have enough cash`);
     }
 
-    // Validate artefacts exist — count-based so stacked offers validate correctly
     const _validateCounts = (offer, inventory, who) => {
       const need = {};
       offer.artefacts.forEach(a => { need[a] = (need[a] || 0) + 1; });
@@ -7001,14 +6706,11 @@ async function executeTrade(interaction, trade, tradeId) {
     _validateCounts(trade.initiatorOffer, initiator.artefacts || [], 'Initiator');
     _validateCounts(trade.recipientOffer, recipient.artefacts || [], 'Recipient');
 
-    // Execute the trade
-    // Transfer cash
     initiator.cash -= trade.initiatorOffer.cash;
     initiator.cash += trade.recipientOffer.cash;
     recipient.cash -= trade.recipientOffer.cash;
     recipient.cash += trade.initiatorOffer.cash;
 
-    // Transfer artefacts
     trade.initiatorOffer.artefacts.forEach(artefact => {
       const index = initiator.artefacts.indexOf(artefact);
       if (index > -1) {
@@ -7044,8 +6746,6 @@ async function executeTrade(interaction, trade, tradeId) {
     await updateQuestProgress(trade.initiator, interaction.guildId, 'tradeComplete', 1);
     await updateQuestProgress(trade.recipient, interaction.guildId, 'tradeComplete', 1);
 
-    // Best-effort: close any open ephemeral picker messages now that the
-    // trade has resolved (Cancel does the same — completion shouldn't differ).
     await closeTradePickers(trade, 'Trade Complete', 'This trade has been completed.', 0x00FF7F);
 
   } catch (error) {
@@ -7068,7 +6768,6 @@ async function executeTrade(interaction, trade, tradeId) {
   }
 }
 
-// Shared helper to close any open ephemeral artefact pickers on a trade.
 async function closeTradePickers(trade, title, description, color) {
   if (!trade || !trade.pickers) return;
   for (const pickerUserId of Object.keys(trade.pickers)) {
@@ -7080,7 +6779,6 @@ async function closeTradePickers(trade, title, description, color) {
         components: []
       });
     } catch (e) {
-      // Picker dismissed or webhook expired — safe to ignore
     }
   }
 }
@@ -7108,11 +6806,9 @@ async function handleTradeCancel(interaction, customId) {
 
   await interaction.update({ embeds: [cancelEmbed], components: [] });
 
-  // Best-effort: clean up any open ephemeral pickers
   await closeTradePickers(trade, 'Trade Cancelled', 'This trade was cancelled.', 0xFF9F43);
 }
 
-// === FISHING FUNCTIONS ===
 
 async function handleFishCommand(interaction, userId) {
   await getUser(userId);
@@ -7178,16 +6874,13 @@ async function handleFishCommand(interaction, userId) {
     ]});
   }
 
-  // Consume one bait
   const baitIdx = userData[userId].items.indexOf(baitUsed);
   userData[userId].items.splice(baitIdx, 1);
 
-  // Roll the catch (hidden from player for now — revealed when they reel in)
   const tier = rollFishTier(baitUsed);
   const fish = pickFish(tier);
   const cashValue = rollFishValue(fish);
 
-  // Roll artefact bonus (uncommon: 10%, rare: 40%, legendary: 100%)
   const artefactChances = { junk: 0, common: 0, uncommon: 0.10, rare: 0.40, legendary: 1.0 };
   let artefactDrop = null;
   if (Math.random() < (artefactChances[tier] || 0)) {
@@ -7204,16 +6897,13 @@ async function handleFishCommand(interaction, userId) {
     }
   }
 
-  // Store session so the Reel In button can retrieve it
   const sessionId = `${userId}-${now}`;
   global.activeFishSessions[sessionId] = { userId, tier, fish, cashValue, baitUsed, artefactDrop, expiresAt: now + 90000 };
 
-  // Set cooldown immediately (bait already consumed, so prevent double-cast)
   cooldowns.fish[userId] = now;
   await saveUserData();
   await saveCooldowns();
 
-  // Hint at the catch without revealing it
   const tierFlavors = {
     junk:      { text: 'The line goes slack almost immediately... something\'s down there, but it feels wrong.', hint: 'Whatever is on the hook feels oddly light.', color: 0x95A5A6 },
     common:    { text: 'A small tug. Something is nibbling at the hook.',                                       hint: 'Feels light — probably a smaller one.',     color: 0x74B9FF },
@@ -7241,7 +6931,6 @@ async function handleFishCommand(interaction, userId) {
 
   await interaction.editReply({ embeds: [castEmbed], components: [reelRow] });
 
-  // Auto-expire after 90 seconds
   setTimeout(async () => {
     if (!global.activeFishSessions[sessionId]) return;
     delete global.activeFishSessions[sessionId];
@@ -7284,7 +6973,6 @@ async function handleReelIn(interaction, sessionId) {
 
   const { tier, fish, cashValue, baitUsed, artefactDrop, userId } = session;
 
-  // Award rewards
   userData[userId].cash += cashValue;
   if (artefactDrop) {
     if (!userData[userId].artefacts) userData[userId].artefacts = [];
@@ -7343,7 +7031,6 @@ async function handleReelIn(interaction, sessionId) {
   await interaction.update({ embeds: [revealEmbed], components: [] });
 }
 
-// === MARBLE GAME FUNCTIONS ===
 
 async function handleMarbleGame(interaction) {
   const userId = interaction.user.id;
@@ -7392,7 +7079,6 @@ async function handleMarbleGame(interaction) {
 
   await interaction.reply({ embeds: [invitationEmbed], components: [buttons] });
 
-  // Auto-expire invitation after 2 minutes
   setTimeout(() => {
     const game = global.activeMarbleGames[gameId];
     if (game && game.phase === 'invitation') {
@@ -7514,7 +7200,6 @@ async function startBettingPhase(interaction, gameId) {
       .setStyle(ButtonStyle.Primary)
   );
 
-  // interaction here is a button interaction (accept button) — must use update()
   await interaction.update({ embeds: [bettingEmbed], components: [betButton] });
 }
 
@@ -7577,7 +7262,6 @@ async function handleBetModalSubmit(interaction, gameId) {
     .setColor(0xFFD700)
     .setTimestamp();
 
-  // Use deferUpdate + message edit since this is a modal submit from a component
   await interaction.deferUpdate();
   await interaction.message.edit({ embeds: [updatedEmbed] });
 
@@ -7651,7 +7335,6 @@ async function startMarbleGame(interaction, gameId) {
   game.gameMessage = msg;
 }
 
-// Delete existing game message and send a fresh one at the bottom of the channel
 async function refreshGameMessage(game, embeds, components) {
   if (game.gameMessage) {
     try { await game.gameMessage.delete(); } catch (_) {}
@@ -7751,7 +7434,6 @@ async function processNumberGuess(interaction, gameId) {
 
   const playerId = interaction.user.id;
 
-  // Verify it is actually this player's turn
   const currentTeamArr = game.currentTeam === 'A' ? game.teamA : game.teamB;
   const currentPlayer = currentTeamArr[game.currentPlayerIndex];
   if (playerId !== currentPlayer.id) {
@@ -7765,21 +7447,17 @@ async function processNumberGuess(interaction, gameId) {
   game.currentPlayerIndex++;
 
   if (game.currentPlayerIndex >= currentTeamArr.length) {
-    // Current team has finished voting
     const otherTeam = game.currentTeam === 'A' ? 'B' : 'A';
 
     if (game.currentTeam === game.firstTeam) {
-      // First team is done — switch to the second team
       game.currentTeam = otherTeam;
       game.currentPlayerIndex = 0;
     } else {
-      // Second team is done — all 4 players have voted, run the draw
       await runRandomizer(gameId);
       return;
     }
   }
 
-  // Update the game message: delete old and resend at bottom
   const updatedEmbed = createGameEmbed(game);
   const numberButton = createNumberSelectionButton(gameId);
   await refreshGameMessage(game, [updatedEmbed], [numberButton]);
@@ -7793,7 +7471,6 @@ async function runRandomizer(gameId) {
   const allGuessedNumbers = Object.values(guesses);
   const uniqueGuesses = [...new Set(allGuessedNumbers)];
 
-  // Delete old message and send fresh one for the rolling animation
   if (game.gameMessage) {
     try { await game.gameMessage.delete(); } catch (_) {}
     game.gameMessage = null;
@@ -7803,7 +7480,6 @@ async function runRandomizer(gameId) {
   let rollLog = [];
   let attempts = 0;
 
-  // Send initial rolling message
   if (game.channel) {
     const initialEmbed = new EmbedBuilder()
       .setTitle('🎲 Drawing Numbers...')
@@ -7840,10 +7516,8 @@ async function runRandomizer(gameId) {
     }
   } while (!uniqueGuesses.includes(drawnNumber));
 
-  // Find all players who guessed this number
   const winnerIds = Object.keys(guesses).filter(id => guesses[id] === drawnNumber);
 
-  // Check if it's a cross-team tie
   const teamAWinners = winnerIds.filter(id => game.teamA.some(p => p.id === id));
   const teamBWinners = winnerIds.filter(id => game.teamB.some(p => p.id === id));
   const isTie = teamAWinners.length > 0 && teamBWinners.length > 0;
@@ -7939,7 +7613,6 @@ async function nextRound(gameId) {
   const nextRoundEmbed = createGameEmbed(game, coinFlip);
   const numberButton = createNumberSelectionButton(game.gameId);
 
-  // Delete old message and send fresh one at the bottom
   await refreshGameMessage(game, [nextRoundEmbed], [numberButton]);
 }
 
@@ -7990,15 +7663,11 @@ async function endGame(gameId) {
     .setFooter({ text: 'Winnings distributed! Thanks for playing.' })
     .setTimestamp();
 
-  // Send final message fresh at the bottom
   await refreshGameMessage(game, [gameEndEmbed], []);
 
   delete global.activeMarbleGames[gameId];
 }
 
-// =============================================
-// === MARBLE DUEL — 1v1 GAME SYSTEM ===
-// =============================================
 
 async function handleMarbleDuel(interaction) {
   const userId = interaction.user.id;
@@ -8047,7 +7716,6 @@ async function handleMarbleDuel(interaction) {
   const buttons = createDuelInvitationButtons(gameId);
   await interaction.reply({ embeds: [embed], components: [buttons] });
 
-  // Auto-expire after 2 minutes
   setTimeout(() => {
     const game = global.activeDuelGames[gameId];
     if (game && game.phase === 'invitation') {
@@ -8270,7 +7938,6 @@ async function startDuelGame(interaction, gameId) {
   game.channel = interaction.channel;
 
   const coinFlip = Math.random() < 0.5 ? 'heads' : 'tails';
-  // heads = P1 (index 0) goes first, tails = P2 (index 1) goes first
   game.currentPlayerIndex = coinFlip === 'heads' ? 0 : 1;
   game.firstPlayerIndex = game.currentPlayerIndex;
   game.votedCount = 0;
@@ -8385,15 +8052,12 @@ async function processDuelGuess(interaction, gameId) {
   await interaction.reply({ content: `✅ You locked in **${number}**. Keep it secret!`, ephemeral: true });
 
   if (game.votedCount >= 2) {
-    // Both players have voted — run the draw
     await runDuelRandomizer(gameId);
     return;
   }
 
-  // Switch to the other player
   game.currentPlayerIndex = game.currentPlayerIndex === 0 ? 1 : 0;
 
-  // Delete old message and resend fresh at the bottom
   const embed = createDuelGameEmbed(game);
   const pickButton = createDuelPickButton(gameId);
   await refreshDuelMessage(game, [embed], [pickButton]);
@@ -8407,7 +8071,6 @@ async function runDuelRandomizer(gameId) {
   const guesses = game.playerGuesses;
   const uniqueGuesses = [...new Set(Object.values(guesses))];
 
-  // Delete old pick message, send fresh rolling message
   if (game.gameMessage) {
     try { await game.gameMessage.delete(); } catch (_) {}
     game.gameMessage = null;
@@ -8457,7 +8120,6 @@ async function runDuelRandomizer(gameId) {
   const p2Guess = guesses[p2.id];
   const missedLog = rollLog.length > 0 ? `\nMisses: ${rollLog.join('  ')}` : '';
 
-  // Both guessed the same number and it was drawn — tie
   if (p1Guess === drawnNumber && p2Guess === drawnNumber) {
     game.roundHistory.push({ round: game.round, drawn: drawnNumber, result: 'tie' });
 
@@ -8476,12 +8138,10 @@ async function runDuelRandomizer(gameId) {
     return;
   }
 
-  // One player hit it (or neither — shouldn't happen after loop logic)
   const p1Won = p1Guess === drawnNumber;
   const p2Won = p2Guess === drawnNumber;
 
   if (!p1Won && !p2Won) {
-    // Safeguard: no_match, advance without scoring
     game.roundHistory.push({ round: game.round, drawn: drawnNumber, result: 'no_match' });
     setTimeout(() => nextDuelRound(gameId), 4000);
     return;
@@ -8566,7 +8226,6 @@ async function endDuelGame(gameId) {
   const winnerMarbles = p1Won ? game.p1Marbles : game.p2Marbles;
   const loserMarbles = p1Won ? game.p2Marbles : game.p1Marbles;
 
-  // Award full pot to winner
   await getUser(winner.id);
   userData[winner.id].cash += game.totalPot;
   await saveUserData();
@@ -8616,13 +8275,10 @@ async function refreshDuelMessage(game, embeds, components) {
   }
 }
 
-// === MASS SELL SYSTEM ===
 
 
-// === XP CONVERSION SYSTEM ===
 
 async function handleConvertCommand(interaction, userId) {
-  // Initialize user XP data if needed
   if (!userData[userId].xpData) {
     userData[userId].xpData = { xp: 0, messageCount: 0, lastMessage: 0 };
   }
@@ -8685,7 +8341,6 @@ async function handleMiningStatusCommand(interaction) {
   const now = Date.now();
 
   if (event) {
-    // Active event
     const timeLeft = event.endTime - now;
     const hoursLeft = Math.floor(timeLeft / (60 * 60 * 1000));
     const minutesLeft = Math.floor((timeLeft % (60 * 60 * 1000)) / (60 * 1000));
@@ -8722,7 +8377,6 @@ async function handleMiningStatusCommand(interaction) {
     await interaction.reply({ embeds: [eventEmbed] });
 
   } else {
-    // No active event
     const timeUntilNext = nextEventTime - now;
     const daysUntilNext = Math.floor(timeUntilNext / (24 * 60 * 60 * 1000));
     const hoursUntilNext = Math.floor((timeUntilNext % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
@@ -8760,7 +8414,6 @@ async function handleMiningStatusCommand(interaction) {
   }
 }
 
-// === DEVELOPER COMMAND HANDLERS ===
 
 function buildGiveArtefactEmbed(session) {
   const queueText = session.queue.length
@@ -8788,7 +8441,6 @@ function buildGiveArtefactEmbed(session) {
 }
 
 function buildGiveArtefactComponents(sessionId, session) {
-  // Row 1: Rarity picker
   const rarityOptions = rarities.map(r => ({
     label: r.name,
     description: `${r.items.length} artefacts — base sell $${r.sell.toLocaleString()}`,
@@ -8803,7 +8455,6 @@ function buildGiveArtefactComponents(sessionId, session) {
       .addOptions(rarityOptions)
   );
 
-  // Row 2: Artefact picker (filtered by selected rarity)
   const selectedRarityData = rarities.find(r => r.name === session.selectedRarity);
   const artefactRow = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
@@ -8825,7 +8476,6 @@ function buildGiveArtefactComponents(sessionId, session) {
       )
   );
 
-  // Row 3: Action buttons
   const hasSelection = !!session.selectedArtefact;
   const hasQueue = session.queue.length > 0;
   const totalItems = session.queue.reduce((s, e) => s + e.amount, 0);
@@ -8996,7 +8646,6 @@ async function handleGiveArtefactCommand(interaction) {
 }
 
 async function handleGiveCashCommand(interaction) {
-  // Check developer permissions
   if (!isDeveloper(interaction.user.id)) {
     const accessDeniedEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -9011,10 +8660,8 @@ async function handleGiveCashCommand(interaction) {
   const amount = interaction.options.getInteger('amount');
   const targetId = targetUser.id;
 
-  // Initialize target user if needed
   if (!userData[targetId]) userData[targetId] = { cash: 0, artefacts: [], bankBalance: 0 };
 
-  // Give cash to user
   userData[targetId].cash += amount;
   await saveUserData();
 
@@ -9068,7 +8715,6 @@ async function handleAddMoneyCommand(interaction) {
 }
 
 async function handleSetEventCommand(interaction) {
-  // Check developer permissions
   if (!isDeveloper(interaction.user.id)) {
     const accessDeniedEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -9082,7 +8728,6 @@ async function handleSetEventCommand(interaction) {
   const positiveArtefact = interaction.options.getString('positive_artefact');
   const negativeArtefact = interaction.options.getString('negative_artefact');
 
-  // Validate artefacts exist
   const positiveRarity = getRarityByArtefact(positiveArtefact);
   const negativeRarity = getRarityByArtefact(negativeArtefact);
 
@@ -9111,13 +8756,11 @@ async function handleSetEventCommand(interaction) {
     return await interaction.reply({ embeds: [sameArtefactEmbed], ephemeral: true });
   }
 
-  // End current event if one is active
   const eventData = await getEventSystem();
   if (eventData && eventData.currentEvent) {
     await endCurrentEvent();
   }
 
-  // Create new event
   const now = Date.now();
   const newEvent = {
     id: `dev_event_${now}`,
@@ -9173,12 +8816,10 @@ async function handleSetEventCommand(interaction) {
 
   await interaction.reply({ embeds: [eventEmbed] });
 
-  // Broadcast the event start
   await broadcastEventStart(newEvent);
 }
 
 async function handleRemoveArtefactCommand(interaction) {
-  // Check developer permissions
   if (!isDeveloper(interaction.user.id)) {
     const accessDeniedEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -9193,10 +8834,8 @@ async function handleRemoveArtefactCommand(interaction) {
   const artefactName = interaction.options.getString('artefact');
   const targetId = targetUser.id;
 
-  // Initialize target user if needed
   if (!userData[targetId]) userData[targetId] = { cash: 0, artefacts: [], bankBalance: 0 };
 
-  // Check if user has the artefact
   const artefactIndex = userData[targetId].artefacts.findIndex(item => item === artefactName);
   if (artefactIndex === -1) {
     const notFoundEmbed = new EmbedBuilder()
@@ -9210,7 +8849,6 @@ async function handleRemoveArtefactCommand(interaction) {
 
   const rarity = getRarityByArtefact(artefactName);
 
-  // Remove artefact from user
   userData[targetId].artefacts.splice(artefactIndex, 1);
   await saveUserData();
 
@@ -9233,7 +8871,6 @@ async function handleRemoveArtefactCommand(interaction) {
 }
 
 async function handleRemoveCashCommand(interaction) {
-  // Check developer permissions
   if (!isDeveloper(interaction.user.id)) {
     const accessDeniedEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -9248,12 +8885,10 @@ async function handleRemoveCashCommand(interaction) {
   const amount = interaction.options.getInteger('amount');
   const targetId = targetUser.id;
 
-  // Initialize target user if needed
   if (!userData[targetId]) userData[targetId] = { cash: 0, artefacts: [], bankBalance: 0 };
 
   const totalWealth = userData[targetId].cash + (userData[targetId].bankBalance || 0);
 
-  // Check if user has enough total money (cash + bank)
   if (totalWealth < amount) {
     const insufficientEmbed = new EmbedBuilder()
       .setTitle('Insufficient Funds')
@@ -9273,14 +8908,12 @@ async function handleRemoveCashCommand(interaction) {
   let removedFromCash = 0;
   let removedFromBank = 0;
 
-  // First, remove from cash
   if (userData[targetId].cash > 0) {
     removedFromCash = Math.min(userData[targetId].cash, remainingToRemove);
     userData[targetId].cash -= removedFromCash;
     remainingToRemove -= removedFromCash;
   }
 
-  // Then, remove remaining from bank if needed
   if (remainingToRemove > 0 && userData[targetId].bankBalance > 0) {
     removedFromBank = Math.min(userData[targetId].bankBalance, remainingToRemove);
     userData[targetId].bankBalance -= removedFromBank;
@@ -9309,7 +8942,6 @@ async function handleRemoveCashCommand(interaction) {
 }
 
 async function handleResetCooldownsCommand(interaction) {
-  // Check developer permissions
   if (!isDeveloper(interaction.user.id)) {
     const accessDeniedEmbed = new EmbedBuilder()
       .setTitle('Access Denied')
@@ -9323,10 +8955,8 @@ async function handleResetCooldownsCommand(interaction) {
   const targetUser = interaction.options.getUser('user');
 
   if (targetUser) {
-    // Reset cooldowns for specific user
     const userId = targetUser.id;
 
-    // Clear all cooldowns for this user (safe deletion from objects)
     if (cooldowns.scavenge && cooldowns.scavenge[userId]) delete cooldowns.scavenge[userId];
     if (cooldowns.labor && cooldowns.labor[userId]) delete cooldowns.labor[userId];
     if (cooldowns.steal && cooldowns.steal[userId]) delete cooldowns.steal[userId];
@@ -9348,7 +8978,6 @@ async function handleResetCooldownsCommand(interaction) {
 
     await interaction.editReply({ embeds: [successEmbed] });
   } else {
-    // Reset cooldowns for ALL users globally
     cooldowns.scavenge = {};
     cooldowns.labor = {};
     cooldowns.steal = {};
@@ -9399,7 +9028,6 @@ async function handleDevlogCommand(interaction) {
 
   for (const [guildId, guild] of guilds) {
     try {
-      // Try configured announcement channel first
       const announcementChannelId = await getAnnouncementChannelId(guildId);
       let channel = null;
 
@@ -9408,7 +9036,6 @@ async function handleDevlogCommand(interaction) {
         if (channel && (!channel.isTextBased || !channel.isTextBased())) channel = null;
       }
 
-      // Fall back to first writable text channel
       if (!channel) {
         const textChannels = guild.channels.cache
           .filter(c => c.isTextBased() && c.permissionsFor(guild.members.me)?.has('SendMessages'))
@@ -9823,7 +9450,6 @@ async function handleObserveCommand(interaction, observerId) {
     });
   }
 
-  // Pull live data
   await updateQuestProgress(observerId, interaction.guildId, 'observeUsed', 1);
   const bankCapacity = await calculateBankCapacity(targetId);
   const totalWealth = target.cash + (target.bankBalance || 0);
@@ -9842,7 +9468,6 @@ async function handleObserveCommand(interaction, observerId) {
     ? `<t:${Math.floor(target.joinedDate / 1000)}:D>`
     : 'Before records began';
 
-  // Build artefact lines
   const artefactCounts = {};
   (target.artefacts || []).forEach(name => {
     artefactCounts[name] = (artefactCounts[name] || 0) + 1;
@@ -9859,14 +9484,12 @@ async function handleObserveCommand(interaction, observerId) {
     return `${emoji} ${name} (${rarity ? rarity.name : 'Unknown'} T${tier} — $${sellDisplay.toLocaleString()})${countSuffix}`;
   });
 
-  // Items summary
   const itemCounts = {};
   (target.items || []).forEach(item => { itemCounts[item] = (itemCounts[item] || 0) + 1; });
   const itemsDisplay = Object.entries(itemCounts)
     .map(([name, count]) => `${name}${count > 1 ? ` [${count}]` : ''}`)
     .join(', ') || 'No items purchased';
 
-  // Chunk artefacts across pages (15 per artefact page)
   const ARTS_PER_PAGE = 15;
   const artefactChunks = [];
   if (artefactLines.length === 0) {
@@ -9877,7 +9500,6 @@ async function handleObserveCommand(interaction, observerId) {
     }
   }
 
-  // Page layout: [0] Financial | [1..n] Artefacts | [last] Profile
   const totalPages = 2 + artefactChunks.length;
   let currentPage = 0;
 
@@ -9977,7 +9599,6 @@ async function handleObserveCommand(interaction, observerId) {
   });
 }
 
-// === CARD DUEL GAME ===
 
 const CARD_RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
 const CARD_SUITS = ['♠','♥','♦','♣'];
@@ -10444,15 +10065,11 @@ async function endCardDuelGame(game) {
   }
 }
 
-// ============================================================
-// === RAID SEASON HANDLERS ===================================
-// ============================================================
 
 async function buildRaidBrowsePayload(session, sessionId) {
   const PER_PAGE   = 5;
   const allPlayers = await getAllRaidPlayers();
 
-  // Only show players who have actually built something — exclude self and already-raided
   const eligible = allPlayers.filter(p =>
     p._id !== session.userId &&
     !(session.raidedAlready || []).includes(p._id) &&
@@ -10464,7 +10081,6 @@ async function buildRaidBrowsePayload(session, sessionId) {
   session.page      = safePage;
   const pagePlayers = eligible.slice(safePage * PER_PAGE, (safePage + 1) * PER_PAGE);
 
-  // Fetch display names in parallel
   const userFetches = await Promise.all(pagePlayers.map(p => client.users.fetch(p._id).catch(() => null)));
   const nameMap = {};
   pagePlayers.forEach((p, i) => { nameMap[p._id] = userFetches[i] ? userFetches[i].username : p._id; });
@@ -10557,7 +10173,6 @@ async function handleViewCPCommand(interaction) {
   const target = interaction.options.getUser('player');
 
   if (!target || target.id === interaction.user.id) {
-    // Own CP — shows actual and relative both
     const raidData = await getRaidPlayer(interaction.user.id);
     const { relative, actual } = calcRaidCP(raidData);
     const unitLines = RAID_UNITS
@@ -10585,7 +10200,6 @@ async function handleViewCPCommand(interaction) {
       ephemeral: true
     });
   } else {
-    // Another player — relative only
     const raidData = await getRaidPlayer(target.id);
     const { relative } = calcRaidCP(raidData);
     const unitLines = RAID_UNITS
@@ -10638,7 +10252,6 @@ async function handleRaidCommand(interaction) {
   const payload = await buildRaidBrowsePayload(global.activeRaidBrowseSessions[sessionId], sessionId);
   await interaction.reply(payload);
 
-  // Auto-clean session after 10 minutes
   setTimeout(() => { delete global.activeRaidBrowseSessions[sessionId]; }, 600000);
 }
 
@@ -10646,7 +10259,6 @@ async function handleRaidBuyUnit(interaction) {
   const season = await getRaidSeason();
   if (!season.active) return await interaction.reply({ content: 'No active Raid Season.', ephemeral: true });
 
-  // Format: raid_buy_{unitId}_{qty}_p{page}
   const withoutPrefix = interaction.customId.replace('raid_buy_', '');
   const pageMatch     = withoutPrefix.match(/_p(\d+)$/);
   const raidPage      = pageMatch ? parseInt(pageMatch[1], 10) : 0;
@@ -10684,7 +10296,6 @@ async function handleRaidTrainUnit(interaction) {
   const season = await getRaidSeason();
   if (!season.active) return await interaction.reply({ content: 'No active Raid Season.', ephemeral: true });
 
-  // Format: raid_train_{unitId}_p{page}
   const withoutPrefix = interaction.customId.replace('raid_train_', '');
   const pageMatch     = withoutPrefix.match(/_p(\d+)$/);
   const raidPage      = pageMatch ? parseInt(pageMatch[1], 10) : 0;
@@ -10771,7 +10382,6 @@ async function handleRaidConfirmAttack(interaction, targetId, deployMerc) {
   attackerData.raidsCompleted = (attackerData.raidsCompleted || 0) + 1;
   await saveRaidPlayer(attackerData);
 
-  // Update any active browse session for this user
   const session = Object.values(global.activeRaidBrowseSessions).find(s => s.userId === attackerId);
   if (session) { session.raidedAlready = attackerData.raidsInitiated; session.mercenariesOwned = attackerData.mercenariesOwned; }
 
@@ -10782,15 +10392,12 @@ async function handleRaidConfirmAttack(interaction, targetId, deployMerc) {
   const attackerName = attackerUser ? attackerUser.username : attackerId;
   const defenderName = defenderUser ? defenderUser.username : targetId;
 
-  // Relative CP for display; matchup-adjusted CP for resolution
   const attackerCP = calcRaidCP(attackerData);
   const defenderCP = calcRaidCP(defenderData);
   const { attackerAdjusted, defenderAdjusted } = calcRaidCPWithMatchups(attackerData, defenderData, deployMerc);
 
-  // Build opening battle overview embed
   const delay = Math.floor(Math.random() * 11) + 10; // 10-20 seconds
   const scenes = generateBattleScenes(attackerData, defenderData, attackerName, defenderName, deployMerc);
-  // Distribute scenes evenly across the delay window, leaving the last slot for the result
   const stageCount  = scenes.length;
   const stageDelay  = Math.floor((delay * 1000) / (stageCount + 1));
 
@@ -10826,7 +10433,6 @@ async function handleRaidConfirmAttack(interaction, targetId, deployMerc) {
 
   await interaction.update({ embeds: [openingEmbed], components: [] });
 
-  // Schedule each battlefield scene as an embed edit
   for (let i = 0; i < stageCount; i++) {
     setTimeout(async () => {
       try {
@@ -10841,7 +10447,6 @@ async function handleRaidConfirmAttack(interaction, targetId, deployMerc) {
     }, stageDelay * (i + 1));
   }
 
-  // Final resolution after the full delay
   setTimeout(async () => {
     try {
       const attackerWins = attackerAdjusted > defenderAdjusted;
@@ -10854,7 +10459,6 @@ async function handleRaidConfirmAttack(interaction, targetId, deployMerc) {
 
       if (attackerWins) { attackerData.victories = (attackerData.victories || 0) + 1; defenderData.losses = (defenderData.losses || 0) + 1; }
       else              { defenderData.victories = (defenderData.victories || 0) + 1; }
-      // Attacker takes no loss when repelled — they can regroup and the defender can counter-raid
       await Promise.all([saveRaidPlayer(attackerData), saveRaidPlayer(defenderData)]);
 
       const winnerRaidData = attackerWins ? attackerData : defenderData;
@@ -10889,7 +10493,6 @@ async function handleRaidConfirmAttack(interaction, targetId, deployMerc) {
 
       try { await interaction.editReply({ embeds: [resultEmbed], components: [] }); } catch (e) {}
 
-      // DM both players
       const [winnerUser2, loserUser2] = await Promise.all([
         client.users.fetch(winnerId).catch(() => null),
         client.users.fetch(loserId).catch(() => null)
@@ -10917,9 +10520,6 @@ async function handleRaidConfirmAttack(interaction, targetId, deployMerc) {
   }, delay * 1000);
 }
 
-// ============================================================
-// === RAID TUTORIAL ==========================================
-// ============================================================
 
 const RAID_TUTORIAL_PAGES = [
   {
@@ -11097,8 +10697,6 @@ async function handleRaidTutorialButton(interaction) {
   const page = parseInt(customId.replace('raid_tutorial_', ''), 10);
   if (isNaN(page)) return;
 
-  // First click: interaction.reply (not yet responded to)
-  // Subsequent clicks: interaction.update (already responded)
   const payload = buildRaidTutorialPayload(page);
   if (interaction.replied || interaction.deferred) {
     await interaction.update(payload);
@@ -11115,7 +10713,6 @@ async function handleServerBlacklistCommand(interaction) {
   const serverId = interaction.options.getString('serverid').trim();
   const action   = interaction.options.getString('action'); // 'blacklist' | 'unblacklist'
 
-  // Basic snowflake sanity check
   if (!/^\d{17,20}$/.test(serverId)) {
     return await interaction.reply({ embeds: [new EmbedBuilder().setTitle('Invalid Server ID').setDescription(`\`${serverId}\` does not look like a valid Discord server ID.`).setColor(0xFF6B6B)], ephemeral: true });
   }
@@ -11128,7 +10725,6 @@ async function handleServerBlacklistCommand(interaction) {
     }
     await setServerBlacklist(serverId, true);
 
-    // Attempt to resolve the server name for clarity
     const guild = client.guilds.cache.get(serverId);
     const serverName = guild ? `**${guild.name}** (\`${serverId}\`)` : `\`${serverId}\``;
 
@@ -11230,7 +10826,6 @@ async function handleEndRaidCommand(interaction) {
     if (!user) continue;
 
     user.cash = (user.cash || 0) + netChange;
-    // If cash goes negative, draw from bank (which can also go negative — debt)
     if (user.cash < 0) {
       const shortfall  = Math.abs(user.cash);
       user.cash        = 0;
@@ -11244,7 +10839,6 @@ async function handleEndRaidCommand(interaction) {
   if (raidPlayersCollection) await raidPlayersCollection.deleteMany({});
   await saveRaidSeason({ active: false, startedAt: season.startedAt, endsAt: Date.now(), seasonId: season.seasonId });
 
-  // DM individual results
   for (const r of results) {
     try {
       const u = await client.users.fetch(r.userId).catch(() => null);
