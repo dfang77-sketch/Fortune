@@ -30,7 +30,7 @@ jobs:
             --arg author_name "$PUSHER pushed to $BRANCH" \
             --arg commit_url "$COMMIT_URL" \
             --arg avatar_url "$AVATAR_URL" \
-            --arg title "🀄 New Commit · $BRANCH" \
+            --arg title "New Commit · $BRANCH" \
             --arg description "$COMMIT_MSG" \
             --argjson color 9109504 \
             --arg short_sha "$SHORT_SHA" \
