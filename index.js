@@ -1,4 +1,4 @@
-// hi guys
+// hello. feel free to look.
 const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
