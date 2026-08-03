@@ -52,17 +52,17 @@ jobs:
                 color: $color,
                 fields: [
                   {
-                    name: "🔑  Commit",
+                    name: "Commit",
                     value: ("[`" + $short_sha + "`](" + $commit_url + ")"),
                     inline: true
                   },
                   {
-                    name: "📂  Repository",
+                    name: "Repository",
                     value: ("[" + $repo + "](" + $repo_url + ")"),
                     inline: true
                   },
                   {
-                    name: "✍️  Author",
+                    name: "Author",
                     value: $author,
                     inline: true
                   }
